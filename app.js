@@ -20,7 +20,7 @@ const CONFIG = {
     DEFAULT_RANGE: '계획표', // 기본 시트 이름
     DISPLAY_RANGES: {
         // 시트별 표시 범위 설정 (A1 표기법)
-        '계획표': 'B1:C287'    // Ko계획표는 B1부터 C179까지만 표시
+        '계획표': 'B1:C287'    // 계획표는 B1:C287까지만 표시
     }
 };
 
@@ -548,7 +548,7 @@ function displayFormattedData(gridData, merges, sheetProperties, displayRange) {
     }
 }
 
-// 열 너비 자동 조정 함수
+// 열 너비 자동 조정 함수 개선
 function adjustColumnWidths() {
     const table = document.querySelector('.sheet-table');
     if (!table) return;
@@ -562,33 +562,100 @@ function adjustColumnWidths() {
     const cellCount = firstRow.cells.length;
     let colWidths = new Array(cellCount).fill(0);
     
-    // 각 셀의 내용에 따라 필요한 너비 계산
+    // 1. 원본 시트의 열 너비 정보 활용 (가능한 경우)
+    if (spreadsheetInfo && spreadsheetInfo.sheets && spreadsheetInfo.sheets.length > 0) {
+        const currentSheetInfo = spreadsheetInfo.sheets.find(s => s.properties.title === currentSheet);
+        if (currentSheetInfo && currentSheetInfo.properties && currentSheetInfo.properties.gridProperties) {
+            const columnMetadata = currentSheetInfo.properties.gridProperties.columnMetadata;
+            if (columnMetadata) {
+                columnMetadata.forEach((metadata, index) => {
+                    if (index < colWidths.length && metadata.pixelSize) {
+                        // 원본 열 너비를 기본값으로 설정 (약간의 여유 추가)
+                        colWidths[index] = metadata.pixelSize + 10;
+                    }
+                });
+                console.log('원본 시트 열 너비 정보 적용:', colWidths);
+            }
+        }
+    }
+    
+    // 2. 각 셀의 내용에 따라 필요한 너비 계산 (최소 너비 보장)
     rows.forEach(row => {
         Array.from(row.cells).forEach((cell, index) => {
             if (index >= colWidths.length) return;
             
-            // 셀 내용의 길이에 따라 너비 결정
-            const contentLength = cell.textContent.length;
-            const cellWidth = Math.max(contentLength * 10, 80); // 글자당 10px, 최소 80px
+            // 셀 내용 분석을 위한 요소들
+            const text = cell.textContent || '';
+            const hasLongWord = text.split(' ').some(word => word.length > 15);
+            const isNumeric = /^\d+(\.\d+)?$/.test(text.trim());
+            const hasSpecialChars = /[^\w\s]/.test(text);
+            
+            // 콘텐츠 타입에 따른 너비 계산
+            let contentWidth;
+            
+            if (isNumeric) {
+                // 숫자는 일반적으로 더 적은 공간 필요
+                contentWidth = text.length * 8;
+            } else if (hasLongWord) {
+                // 긴 단어가 있으면 더 많은 공간 필요
+                contentWidth = text.length * 11;
+            } else if (hasSpecialChars) {
+                // 특수 문자가 있으면 약간 더 공간 필요
+                contentWidth = text.length * 10;
+            } else {
+                // 일반 텍스트
+                contentWidth = text.length * 9;
+            }
+            
+            // 최소 너비 적용 (셀 내용이 없거나 짧은 경우)
+            const minWidth = 80;
+            
+            // 셀 패딩 고려 (좌우 패딩 합계)
+            const cellPadding = 16; // 좌우 패딩 8px씩
+            
+            // 최종 셀 너비 계산
+            const cellWidth = Math.max(contentWidth + cellPadding, minWidth);
             
             // colspan 고려
             const colspan = cell.colSpan || 1;
             if (colspan === 1) {
                 colWidths[index] = Math.max(colWidths[index], cellWidth);
+            } else {
+                // 병합된 셀의 경우 너비를 분배
+                const perColWidth = cellWidth / colspan;
+                for (let i = 0; i < colspan && index + i < colWidths.length; i++) {
+                    colWidths[index + i] = Math.max(colWidths[index + i], perColWidth);
+                }
             }
         });
     });
     
-    // 계산된 너비 적용
+    // 3. 전체 테이블 너비 제한 (필요한 경우)
+    const containerWidth = document.querySelector('.container').clientWidth;
+    const totalWidth = colWidths.reduce((sum, width) => sum + width, 0);
+    
+    // 테이블이 컨테이너보다 너무 넓으면 비율에 맞게 조정
+    if (totalWidth > containerWidth * 0.95) {
+        const ratio = (containerWidth * 0.95) / totalWidth;
+        colWidths = colWidths.map(width => Math.max(Math.floor(width * ratio), 40));
+        console.log('컨테이너 너비에 맞게 열 너비 조정:', colWidths);
+    }
+    
+    // 4. 계산된 너비 적용
     const styleSheet = document.createElement('style');
     let styleRules = '';
     
     colWidths.forEach((width, index) => {
-        styleRules += `.sheet-table td:nth-child(${index + 1}) { min-width: ${width}px; }\n`;
+        styleRules += `.sheet-table td:nth-child(${index + 1}) { width: ${width}px; min-width: ${width}px; max-width: ${width * 1.2}px; }\n`;
     });
+    
+    // 테이블 자체의 너비 설정
+    styleRules += `.sheet-table { width: auto; min-width: ${Math.min(totalWidth, containerWidth * 0.95)}px; }\n`;
     
     styleSheet.textContent = styleRules;
     document.head.appendChild(styleSheet);
+    
+    console.log('열 너비 조정 완료:', colWidths);
 }
 
 // 에러 처리 함수
