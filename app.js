@@ -264,6 +264,15 @@ function setupSheets() {
 
 // 네비게이션 버튼 설정
 function setupNavigationButtons() {
+    // 시트가 1개 이하면 네비게이션 버튼 생성하지 않음
+    if (availableSheets.length <= 1) {
+        const existingNav = document.getElementById('nav-container');
+        if (existingNav) {
+            existingNav.style.display = 'none';
+        }
+        return;
+    }
+    
     // 네비게이션 컨테이너 생성
     const navContainer = document.createElement('div');
     navContainer.id = 'nav-container';
@@ -311,11 +320,6 @@ function setupNavigationButtons() {
     } else {
         // controls 요소가 없으면 container에 직접 추가
         document.querySelector('.container').appendChild(navContainer);
-    }
-    
-    // 시트가 1개만 있으면 네비게이션 버튼 숨김
-    if (availableSheets.length <= 1) {
-        navContainer.style.display = 'none';
     }
 }
 
@@ -429,9 +433,17 @@ function getSheetWithFormatting() {
 // 현재 시트 이름 업데이트
 function updateCurrentSheetName() {
     const sheetNameDisplay = document.getElementById('current-sheet-name');
-    if (sheetNameDisplay) {
-        sheetNameDisplay.textContent = currentSheet;
+    if (!sheetNameDisplay) return;
+    
+    // 시트가 1개 이하면 시트 이름 숨김
+    if (availableSheets.length <= 1) {
+        sheetNameDisplay.style.display = 'none';
+        return;
     }
+    
+    // 시트 이름 표시
+    sheetNameDisplay.style.display = 'block';
+    sheetNameDisplay.textContent = currentSheet;
 }
 
 // 현재 시트에 따라 네비게이션 버튼 업데이트
@@ -455,13 +467,26 @@ function updateNavigationButtons() {
 
 // 시트 인디케이터 업데이트 - 클릭 기능 추가
 function updateSheetIndicator() {
+    // 시트가 1개 이하면 인디케이터 숨김
+    if (availableSheets.length <= 1) {
+        const existingIndicator = document.getElementById('sheet-indicator');
+        if (existingIndicator) {
+            existingIndicator.style.display = 'none';
+        }
+        return;
+    }
+    
     // 시트 인디케이터 요소가 없으면 생성
     let indicator = document.getElementById('sheet-indicator');
     if (!indicator) {
         indicator = document.createElement('div');
         indicator.id = 'sheet-indicator';
+        indicator.className = 'sheet-indicator-container';
         document.getElementById('content').insertAdjacentElement('afterend', indicator);
     }
+    
+    // 인디케이터 표시
+    indicator.style.display = 'flex';
     
     // 인디케이터 내용 생성
     let dots = '';
