@@ -1,0 +1,21 @@
+.sheet-table {
+    border-collapse: collapse;
+    width: auto;
+    margin: 0 auto;
+}
+
+.sheet-table td {
+    min-width: 80px;
+    height: 25px;
+    overflow: hidden;
+}
+
+.empty-cell {
+    background-color: transparent;
+}
+
+/* 컨텐츠 영역 스타일 */
+#content {
+    overflow-x: auto;
+    padding: 10px 0;
+}
