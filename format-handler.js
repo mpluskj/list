@@ -28,8 +28,8 @@ function createFormattedTable(gridData, merges, sheetProperties, displayRange) {
     const rows = gridData.rowData || [];
     const range = parseRange(displayRange);
     
-    // 테이블 레이아웃을 auto로 변경하여 콘텐츠에 맞게 조정되도록 함
-    let html = '<table class="sheet-table" style="border-collapse: collapse; width: 100%; table-layout: auto;">';
+    // 테이블 레이아웃을 fixed로 설정하여 % 너비가 제대로 적용되도록 함
+    let html = '<table class="sheet-table" style="border-collapse: collapse; width: 100%; table-layout: fixed;">';
     
     // 각 행 처리
     rows.forEach((row, rowIndex) => {
@@ -48,16 +48,14 @@ function createFormattedTable(gridData, merges, sheetProperties, displayRange) {
             for (let colIndex = startCol; colIndex <= endCol; colIndex++) {
                 const cell = colIndex < row.values.length ? row.values[colIndex] : null;
                 
-                // 셀 스타일 생성 - 줄바꿈 속성 수정
+                // 셀 스타일 생성
                 let style = getStyleForCell(cell);
                 
-                // 긴 텍스트가 아닌 경우 줄바꿈 방지
+                // 셀 값 가져오기
                 const value = cell && cell.formattedValue ? cell.formattedValue : '';
-                if (value.length < 20) {
-                    style += "white-space: nowrap; overflow: hidden; text-overflow: ellipsis;";
-                } else {
-                    style += "word-wrap: break-word; white-space: normal;";
-                }
+                
+                // 줄바꿈 처리 - 기본적으로 줄바꿈 방지, 모바일에서는 CSS로 처리
+                style += "white-space: nowrap; overflow: hidden; text-overflow: ellipsis;";
                 
                 // 셀 생성
                 html += `<td data-row="${rowIndex}" data-col="${colIndex}" style="${style}">${value}</td>`;
@@ -70,6 +68,7 @@ function createFormattedTable(gridData, merges, sheetProperties, displayRange) {
     html += '</table>';
     return html;
 }
+
     
     // 테두리 색상을 가져오는 헬퍼 함수
     function getBorderColor(colorObj, defaultColor) {

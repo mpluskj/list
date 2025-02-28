@@ -152,23 +152,26 @@
 .sheet-table {
     border-collapse: collapse;
     margin: 0 auto;
-    width: auto;
+    width: 100%;
     max-width: 100%;
-    table-layout: auto;
+    table-layout: fixed;
 }
 
 /* 기본적으로 셀 줄바꿈 방지 */
-.sheet-table td {
+.sheet-table td, .sheet-table th {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-/* 긴 텍스트가 있는 셀에만 줄바꿈 허용 */
-.sheet-table td.wrap-text {
-    white-space: normal;
-    word-wrap: break-word;
+/* 모바일에서는 줄바꿈 허용 */
+@media (max-width: 768px) {
+    .sheet-table td, .sheet-table th {
+        white-space: normal;
+        word-wrap: break-word;
+    }
 }
+
 
 /* 모바일 최적화 */
 @media (max-width: 768px) {
