@@ -157,22 +157,6 @@
     table-layout: fixed;
 }
 
-/* 기본적으로 셀 줄바꿈 방지 */
-.sheet-table td, .sheet-table th {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* 모바일에서는 줄바꿈 허용 */
-@media (max-width: 768px) {
-    .sheet-table td, .sheet-table th {
-        white-space: normal;
-        word-wrap: break-word;
-    }
-}
-
-
 /* 모바일 최적화 */
 @media (max-width: 768px) {
     /* 모바일에서 네비게이션 버튼 숨기기 */
