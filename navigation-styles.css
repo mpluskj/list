@@ -22,7 +22,6 @@
     transition: transform 0.2s ease, background-color 0.2s ease;
     position: relative;
 }
-
 .indicator-dot:hover {
     transform: scale(1.2);
     background-color: #aaa;
@@ -149,18 +148,48 @@
     100% { transform: scale(1); }
 }
 
+/* 완전 반응형 테이블 스타일 */
+.sheet-table {
+    border-collapse: collapse;
+    margin: 0 auto;
+    width: 100%;
+    max-width: 100%;
+    table-layout: fixed;
+}
+
+.sheet-table td, .sheet-table th {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    white-space: normal;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* 모바일 최적화 */
 @media (max-width: 768px) {
-    #content {
-        overflow-x: hidden;
-        touch-action: pan-y;
-        -webkit-overflow-scrolling: touch;
-        padding-bottom: 60px; /* 인디케이터를 위한 공간 확보 */
-    }
-    
     /* 모바일에서 네비게이션 버튼 숨기기 */
     .nav-button {
         display: none !important; /* 완전히 숨김 */
+    }
+    
+    .container {
+        max-width: 100%;
+        padding: 10px 5px;
+        overflow-x: hidden; /* 가로 스크롤 방지 */
+    }
+    
+    #content {
+        overflow-x: hidden; /* 가로 스크롤 방지 */
+    }
+    
+    .sheet-table {
+        width: 100%;
+    }
+    
+    /* 모바일에서 텍스트 크기 조정 */
+    .sheet-table td {
+        font-size: 0.9em;
+        padding: 4px 6px;
     }
     
     /* 시트 인디케이터 위치 및 스타일 강화 */
@@ -196,8 +225,17 @@
     }
 }
 
-/* 작은 모바일 화면 최적화 */
+/* 초소형 화면 최적화 */
 @media (max-width: 375px) {
+    .sheet-table td {
+        font-size: 0.85em;
+        padding: 3px 4px;
+    }
+    
+    h1 {
+        font-size: 1.5em;
+    }
+    
     #sheet-indicator {
         bottom: 15px;
     }
@@ -206,5 +244,22 @@
         width: 12px;
         height: 12px;
         margin: 0 6px;
+    }
+}
+
+/* 모바일에서 가로모드 최적화 */
+@media (max-width: 768px) and (orientation: landscape) {
+    .container {
+        padding: 5px;
+    }
+    
+    h1 {
+        margin: 5px 0;
+        font-size: 20px;
+    }
+    
+    #loading {
+        padding: 15px;
+        margin: 10px 0;
     }
 }

@@ -23,48 +23,49 @@ const formatHandler = (function() {
         };
     }
     
-    // 테이블 생성
-    function createFormattedTable(gridData, merges, sheetProperties, displayRange) {
-        const rows = gridData.rowData || [];
-        const range = parseRange(displayRange);
+// 테이블 생성
+function createFormattedTable(gridData, merges, sheetProperties, displayRange) {
+    const rows = gridData.rowData || [];
+    const range = parseRange(displayRange);
+    
+    // 완전 반응형 테이블로 수정
+    let html = '<table class="sheet-table" style="border-collapse: collapse; width: 100%; table-layout: fixed;">';
+    
+    // 각 행 처리
+    rows.forEach((row, rowIndex) => {
+        // 범위 밖의 행은 건너뛰기
+        if (range && (rowIndex < range.startRow || rowIndex > range.endRow)) {
+            return;
+        }
         
-        // 테이블에 border-collapse와 border-spacing 속성 추가 (글꼴 크기 설정 제거)
-        let html = '<table class="sheet-table" style="border-collapse: collapse; border-spacing: 0;">';
+        html += `<tr data-row="${rowIndex}">`;
         
-        // 각 행 처리
-        rows.forEach((row, rowIndex) => {
-            // 범위 밖의 행은 건너뛰기
-            if (range && (rowIndex < range.startRow || rowIndex > range.endRow)) {
-                return;
-            }
+        // 각 셀 처리
+        if (row.values) {
+            const startCol = range ? range.startCol : 0;
+            const endCol = range ? range.endCol : row.values.length - 1;
             
-            html += `<tr data-row="${rowIndex}">`;
-            
-            // 각 셀 처리
-            if (row.values) {
-                const startCol = range ? range.startCol : 0;
-                const endCol = range ? range.endCol : row.values.length - 1;
+            for (let colIndex = startCol; colIndex <= endCol; colIndex++) {
+                const cell = colIndex < row.values.length ? row.values[colIndex] : null;
                 
-                for (let colIndex = startCol; colIndex <= endCol; colIndex++) {
-                    const cell = colIndex < row.values.length ? row.values[colIndex] : null;
-                    
-                    // 셀 스타일 생성
-                    const style = getStyleForCell(cell);
-                    
-                    // 셀 값 가져오기
-                    const value = cell && cell.formattedValue ? cell.formattedValue : '';
-                    
-                    // 셀 생성
-                    html += `<td data-row="${rowIndex}" data-col="${colIndex}" style="${style}">${value}</td>`;
-                }
+                // 셀 스타일 생성 - 반응형을 위한 추가 스타일
+                let style = getStyleForCell(cell);
+                style += "word-wrap: break-word; overflow-wrap: break-word; white-space: normal; overflow: hidden; text-overflow: ellipsis;";
+                
+                // 셀 값 가져오기
+                const value = cell && cell.formattedValue ? cell.formattedValue : '';
+                
+                // 셀 생성
+                html += `<td data-row="${rowIndex}" data-col="${colIndex}" style="${style}">${value}</td>`;
             }
-            
-            html += '</tr>';
-        });
+        }
         
-        html += '</table>';
-        return html;
-    }
+        html += '</tr>';
+    });
+    
+    html += '</table>';
+    return html;
+}
     
     // 테두리 색상을 가져오는 헬퍼 함수
     function getBorderColor(colorObj, defaultColor) {
@@ -78,104 +79,114 @@ const formatHandler = (function() {
         return defaultColor;
     }
     
-    // 셀 스타일 생성
-    function getStyleForCell(cell) {
-        if (!cell) return 'border: 0px solid transparent; padding: 4px 8px;';
-        
-        let style = '';
-        
-        // 배경색 처리
-        let bgColor = 'transparent';
-        if (cell.effectiveFormat && cell.effectiveFormat.backgroundColor) {
-            const bg = cell.effectiveFormat.backgroundColor;
-            bgColor = `rgb(${Math.round(bg.red*255)}, ${Math.round(bg.green*255)}, ${Math.round(bg.blue*255)})`;
-            style += `background-color: ${bgColor};`;
-        }
-        
-        // 테두리 처리 - 기본값 투명, 두께 0px
-        const defaultBorderColor = 'transparent';
-        let hasBorder = false;
-        
-        if (cell.effectiveFormat && cell.effectiveFormat.borders) {
-            const borders = cell.effectiveFormat.borders;
-            
-            // 각 테두리 방향별 처리
-            if (borders.top && borders.top.style !== 'NONE') {
-                const color = getBorderColor(borders.top.color, defaultBorderColor);
-                const width = borders.top.style === 'THICK' ? '2px' : '1px';
-                style += `border-top: ${width} solid ${color};`;
-                hasBorder = true;
-            } else {
-                style += `border-top: 0px solid ${defaultBorderColor};`;
-            }
-            
-            if (borders.right && borders.right.style !== 'NONE') {
-                const color = getBorderColor(borders.right.color, defaultBorderColor);
-                const width = borders.right.style === 'THICK' ? '2px' : '1px';
-                style += `border-right: ${width} solid ${color};`;
-                hasBorder = true;
-            } else {
-                style += `border-right: 0px solid ${defaultBorderColor};`;
-            }
-            
-            if (borders.bottom && borders.bottom.style !== 'NONE') {
-                const color = getBorderColor(borders.bottom.color, defaultBorderColor);
-                const width = borders.bottom.style === 'THICK' ? '2px' : '1px';
-                style += `border-bottom: ${width} solid ${color};`;
-                hasBorder = true;
-            } else {
-                style += `border-bottom: 0px solid ${defaultBorderColor};`;
-            }
-            
-            if (borders.left && borders.left.style !== 'NONE') {
-                const color = getBorderColor(borders.left.color, defaultBorderColor);
-                const width = borders.left.style === 'THICK' ? '2px' : '1px';
-                style += `border-left: ${width} solid ${color};`;
-                hasBorder = true;
-            } else {
-                style += `border-left: 0px solid ${defaultBorderColor};`;
-            }
-        }
-        
-        // 테두리가 전혀 없는 경우 모든 방향에 0px 투명 테두리 적용
-        if (!hasBorder) {
-            style += `
-                border-top: 0px solid ${defaultBorderColor};
-                border-right: 0px solid ${defaultBorderColor};
-                border-bottom: 0px solid ${defaultBorderColor};
-                border-left: 0px solid ${defaultBorderColor};
-            `;
-        }
-        
-        // 텍스트 서식 - 원본 글꼴 크기 유지
-        if (cell.effectiveFormat && cell.effectiveFormat.textFormat) {
-            const textFormat = cell.effectiveFormat.textFormat;
-            
-            // 글꼴 크기 - 원본 크기 유지
-            if (textFormat.fontSize) {
-                style += `font-size: ${textFormat.fontSize}pt;`; // 원본 글꼴 크기 적용 (pt 단위)
-            }
-            
-            if (textFormat.bold) {
-                style += 'font-weight: bold;';
-            }
-            
-            if (textFormat.foregroundColor) {
-                const fg = textFormat.foregroundColor;
-                style += `color: rgb(${Math.round(fg.red*255)}, ${Math.round(fg.green*255)}, ${Math.round(fg.blue*255)});`;
-            }
-        }
-        
-        // 정렬
-        if (cell.effectiveFormat && cell.effectiveFormat.horizontalAlignment) {
-            style += `text-align: ${cell.effectiveFormat.horizontalAlignment.toLowerCase()};`;
-        }
-        
-        // 패딩
-        style += 'padding: 4px 8px;';
-        
-        return style;
+// 셀 스타일 생성
+function getStyleForCell(cell) {
+    if (!cell) return 'border: 0px solid transparent; padding: 4px 6px; word-wrap: break-word; overflow-wrap: break-word; white-space: normal;';
+    
+    let style = '';
+    
+    // 배경색 처리
+    let bgColor = 'transparent';
+    if (cell.effectiveFormat && cell.effectiveFormat.backgroundColor) {
+        const bg = cell.effectiveFormat.backgroundColor;
+        bgColor = `rgb(${Math.round(bg.red*255)}, ${Math.round(bg.green*255)}, ${Math.round(bg.blue*255)})`;
+        style += `background-color: ${bgColor};`;
     }
+    
+    // 테두리 처리 - 기본값 투명, 두께 0px
+    const defaultBorderColor = 'transparent';
+    let hasBorder = false;
+    
+    if (cell.effectiveFormat && cell.effectiveFormat.borders) {
+        const borders = cell.effectiveFormat.borders;
+        
+        // 각 테두리 방향별 처리
+        if (borders.top && borders.top.style !== 'NONE') {
+            const color = getBorderColor(borders.top.color, defaultBorderColor);
+            const width = borders.top.style === 'THICK' ? '2px' : '1px';
+            style += `border-top: ${width} solid ${color};`;
+            hasBorder = true;
+        } else {
+            style += `border-top: 0px solid ${defaultBorderColor};`;
+        }
+        
+        if (borders.right && borders.right.style !== 'NONE') {
+            const color = getBorderColor(borders.right.color, defaultBorderColor);
+            const width = borders.right.style === 'THICK' ? '2px' : '1px';
+            style += `border-right: ${width} solid ${color};`;
+            hasBorder = true;
+        } else {
+            style += `border-right: 0px solid ${defaultBorderColor};`;
+        }
+        
+        if (borders.bottom && borders.bottom.style !== 'NONE') {
+            const color = getBorderColor(borders.bottom.color, defaultBorderColor);
+            const width = borders.bottom.style === 'THICK' ? '2px' : '1px';
+            style += `border-bottom: ${width} solid ${color};`;
+            hasBorder = true;
+        } else {
+            style += `border-bottom: 0px solid ${defaultBorderColor};`;
+        }
+        
+        if (borders.left && borders.left.style !== 'NONE') {
+            const color = getBorderColor(borders.left.color, defaultBorderColor);
+            const width = borders.left.style === 'THICK' ? '2px' : '1px';
+            style += `border-left: ${width} solid ${color};`;
+            hasBorder = true;
+        } else {
+            style += `border-left: 0px solid ${defaultBorderColor};`;
+        }
+    }
+    
+    // 테두리가 전혀 없는 경우 모든 방향에 0px 투명 테두리 적용
+    if (!hasBorder) {
+        style += `
+            border-top: 0px solid ${defaultBorderColor};
+            border-right: 0px solid ${defaultBorderColor};
+            border-bottom: 0px solid ${defaultBorderColor};
+            border-left: 0px solid ${defaultBorderColor};
+        `;
+    }
+    
+    // 텍스트 서식
+    if (cell.effectiveFormat && cell.effectiveFormat.textFormat) {
+        const textFormat = cell.effectiveFormat.textFormat;
+        
+        // 글꼴 크기 - 원본 크기 유지
+        if (textFormat.fontSize) {
+            // 모바일에서는 글꼴 크기 약간 축소
+            const scaleFactor = window.innerWidth < 500 ? 0.9 : 1;
+            const fontSize = textFormat.fontSize * scaleFactor;
+            style += `font-size: ${fontSize}pt;`;
+        }
+        
+        if (textFormat.bold) {
+            style += 'font-weight: bold;';
+        }
+        
+        if (textFormat.foregroundColor) {
+            const fg = textFormat.foregroundColor;
+            style += `color: rgb(${Math.round(fg.red*255)}, ${Math.round(fg.green*255)}, ${Math.round(fg.blue*255)});`;
+        }
+    }
+    
+    // 정렬
+    if (cell.effectiveFormat && cell.effectiveFormat.horizontalAlignment) {
+        style += `text-align: ${cell.effectiveFormat.horizontalAlignment.toLowerCase()};`;
+    }
+    
+    // 패딩 - 모바일 최적화를 위해 축소
+    let padding = '4px 6px';
+    if (window.innerWidth < 500) {
+        padding = '3px 4px';
+    }
+    style += `padding: ${padding};`;
+    
+    // 반응형을 위한 추가 스타일
+    style += 'word-wrap: break-word; overflow-wrap: break-word; white-space: normal; overflow: hidden; text-overflow: ellipsis;';
+    
+    return style;
+}
     
     // 병합 셀 적용
     function applyMerges(merges) {
