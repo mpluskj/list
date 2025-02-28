@@ -157,6 +157,21 @@
     table-layout: fixed;
 }
 
+/* 모든 셀에 줄바꿈 허용 */
+.sheet-table td, .sheet-table th {
+    white-space: normal;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    overflow: visible;
+    padding: 4px 8px;
+}
+
+/* 테이블 셀 높이 자동 조정 */
+.sheet-table tr {
+    height: auto;
+}
+
+
 /* 모바일 최적화 */
 @media (max-width: 768px) {
     /* 모바일에서 네비게이션 버튼 숨기기 */

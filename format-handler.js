@@ -54,8 +54,11 @@ function createFormattedTable(gridData, merges, sheetProperties, displayRange) {
                 // 셀 값 가져오기
                 const value = cell && cell.formattedValue ? cell.formattedValue : '';
                 
-                // 줄바꿈 처리 - 기본적으로 줄바꿈 방지, 모바일에서는 CSS로 처리
-                style += "white-space: nowrap; overflow: hidden; text-overflow: ellipsis;";
+                // 원본 셀 서식에서 줄바꿈 설정 확인
+                const wrapText = cell && cell.effectiveFormat && cell.effectiveFormat.wrapStrategy === 'WRAP';
+                
+                // 항상 줄바꿈 허용 (원본 서식 유지)
+                style += "white-space: normal; word-wrap: break-word; overflow-wrap: break-word;";
                 
                 // 셀 생성
                 html += `<td data-row="${rowIndex}" data-col="${colIndex}" style="${style}">${value}</td>`;
@@ -68,6 +71,7 @@ function createFormattedTable(gridData, merges, sheetProperties, displayRange) {
     html += '</table>';
     return html;
 }
+
 
     
     // 테두리 색상을 가져오는 헬퍼 함수
@@ -84,7 +88,7 @@ function createFormattedTable(gridData, merges, sheetProperties, displayRange) {
     
 // 셀 스타일 생성
 function getStyleForCell(cell) {
-    if (!cell) return 'border: 0px solid transparent; padding: 4px 6px;';
+    if (!cell) return 'border: 0px solid transparent; padding: 4px 6px; white-space: normal; word-wrap: break-word;';
     
     let style = '';
     
@@ -170,6 +174,9 @@ function getStyleForCell(cell) {
         }
     }
     
+    // 줄바꿈 설정 - 항상 허용
+    style += 'white-space: normal; word-wrap: break-word; overflow-wrap: break-word;';
+    
     // 정렬
     if (cell.effectiveFormat && cell.effectiveFormat.horizontalAlignment) {
         style += `text-align: ${cell.effectiveFormat.horizontalAlignment.toLowerCase()};`;
@@ -180,6 +187,7 @@ function getStyleForCell(cell) {
     
     return style;
 }
+
     
     // 병합 셀 적용
     function applyMerges(merges) {

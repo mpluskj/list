@@ -578,7 +578,7 @@ function displayFormattedData(gridData, merges, sheetProperties, displayRange) {
     }
 }
 
-// 열 너비 자동 조정 함수 - 원본 비율 유지
+// 열 너비 자동 조정 함수 - 원본 비율 유지, 줄바꿈 허용
 function adjustColumnWidths() {
     const table = document.querySelector('.sheet-table');
     if (!table) return;
@@ -674,26 +674,20 @@ function adjustColumnWidths() {
         }\n`;
     });
     
-    // 줄바꿈 처리 - 기본적으로 줄바꿈 방지
+    // 모든 셀에 줄바꿈 허용
     styleRules += `
         .sheet-table td, .sheet-table th {
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        
-        @media (max-width: 768px) {
-            .sheet-table td, .sheet-table th {
-                white-space: normal;
-                word-wrap: break-word;
-            }
+            white-space: normal;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            overflow: visible;
         }
     `;
     
     styleSheet.textContent = styleRules;
     document.head.appendChild(styleSheet);
     
-    console.log('원본 비율 기반 열 너비 조정 완료:', finalWidths);
+    console.log('원본 비율 기반 열 너비 조정 완료 (줄바꿈 허용):', finalWidths);
 }
 
 
