@@ -576,7 +576,7 @@ function displayFormattedData(gridData, merges, sheetProperties, displayRange) {
     }
 }
 
-// 열 너비 자동 조정 함수 - 가로 스크롤 없는 완전 반응형
+// 열 너비 자동 조정 함수 - 줄바꿈 문제 해결
 function adjustColumnWidths() {
     const table = document.querySelector('.sheet-table');
     if (!table) return;
@@ -594,95 +594,57 @@ function adjustColumnWidths() {
     const firstRow = rows[0];
     const cellCount = firstRow.cells.length;
     
-    // 기본 열 너비 설정 - 모든 열에 동일한 비율 적용
-    const baseColWidth = Math.floor(availableWidth / cellCount);
-    let colWidths = new Array(cellCount).fill(baseColWidth);
-    
-    // 각 셀의 내용에 따라 상대적 중요도 계산
-    let contentImportance = new Array(cellCount).fill(1); // 기본 중요도
+    // 각 열의 최대 콘텐츠 길이 계산
+    let maxContentLengths = new Array(cellCount).fill(0);
     
     rows.forEach(row => {
         Array.from(row.cells).forEach((cell, index) => {
             if (index >= cellCount) return;
             
-            // 셀 내용 길이로 중요도 판단
+            // 셀 내용 길이
             const text = cell.textContent || '';
-            if (text.length > 0) {
-                // 내용이 있는 셀의 중요도 증가
-                contentImportance[index] += Math.min(text.length / 10, 5);
-                
-                // 숫자만 있는 경우 중요도 감소
-                if (/^\d+(\.\d+)?$/.test(text.trim())) {
-                    contentImportance[index] *= 0.7;
-                }
-                
-                // 제목 행이나 중요 셀은 중요도 증가
-                if (cell.tagName === 'TH' || cell.style.fontWeight === 'bold') {
-                    contentImportance[index] *= 1.2;
-                }
-            }
+            const contentLength = text.length;
+            
+            // 콘텐츠 길이 업데이트
+            maxContentLengths[index] = Math.max(maxContentLengths[index], contentLength);
         });
     });
     
-    // 중요도에 따라 너비 재분배
-    const totalImportance = contentImportance.reduce((sum, imp) => sum + imp, 0);
-    colWidths = contentImportance.map(imp => 
-        Math.max(Math.floor((imp / totalImportance) * availableWidth), 40) // 최소 40px
-    );
+    // 콘텐츠 길이에 따른 열 너비 계산
+    // 짧은 텍스트는 더 작은 너비, 긴 텍스트는 더 큰 너비 할당
+    const colWidths = maxContentLengths.map(length => {
+        if (length <= 5) return 60;  // 매우 짧은 텍스트
+        if (length <= 10) return 80;  // 짧은 텍스트
+        if (length <= 20) return 120; // 중간 텍스트
+        if (length <= 40) return 180; // 긴 텍스트
+        return 240; // 매우 긴 텍스트
+    });
     
-    // 총 너비가 사용 가능한 너비를 초과하지 않도록 조정
-    let totalWidth = colWidths.reduce((sum, width) => sum + width, 0);
+    // 총 너비 계산
+    const totalWidth = colWidths.reduce((sum, width) => sum + width, 0);
+    
+    // 총 너비가 사용 가능한 너비를 초과하는 경우 비율에 맞게 조정
+    let finalWidths = colWidths;
     if (totalWidth > availableWidth) {
         const ratio = availableWidth / totalWidth;
-        colWidths = colWidths.map(width => Math.floor(width * ratio));
-        totalWidth = availableWidth;
+        finalWidths = colWidths.map(width => Math.max(Math.floor(width * ratio), 40));
     }
-    
-    // 테이블 스타일 설정
-    table.style.width = '100%';
-    table.style.maxWidth = '100%';
-    table.style.tableLayout = 'fixed'; // 고정 레이아웃 사용
-    
-    // 모든 셀에 줄바꿈 설정
-    const cellStyle = document.createElement('style');
-    cellStyle.textContent = `
-        .sheet-table td, .sheet-table th {
-            word-wrap: break-word;
-            overflow-wrap: break-word;
-            white-space: normal;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 100%;
-            padding: 4px 6px; /* 패딩 축소 */
-        }
-    `;
-    document.head.appendChild(cellStyle);
     
     // 열 너비 CSS 적용
     const styleSheet = document.createElement('style');
     let styleRules = '';
     
-    colWidths.forEach((width, index) => {
-        // 반응형을 위해 %로 너비 설정
-        const widthPercent = (width / totalWidth) * 100;
-        styleRules += `.sheet-table td:nth-child(${index + 1}), .sheet-table th:nth-child(${index + 1}) { width: ${widthPercent}%; }\n`;
+    finalWidths.forEach((width, index) => {
+        styleRules += `.sheet-table td:nth-child(${index + 1}) { min-width: ${width}px; max-width: ${width}px; }\n`;
     });
+    
+    // 테이블 레이아웃을 auto로 설정
+    styleRules += `.sheet-table { table-layout: auto; width: auto; max-width: 100%; }\n`;
     
     styleSheet.textContent = styleRules;
     document.head.appendChild(styleSheet);
     
-    // 모바일에서 텍스트 크기 축소 (선택적)
-    if (window.innerWidth < 500) {
-        const mobileStyle = document.createElement('style');
-        mobileStyle.textContent = `
-            .sheet-table td, .sheet-table th {
-                font-size: 0.9em; /* 모바일에서 텍스트 크기 축소 */
-            }
-        `;
-        document.head.appendChild(mobileStyle);
-    }
-    
-    console.log('반응형 열 너비 조정 완료 (스크롤 없음):', colWidths);
+    console.log('열 너비 조정 완료:', finalWidths);
 }
 
 // 에러 처리 함수
