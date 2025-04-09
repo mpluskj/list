@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
+    <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" rel="stylesheet">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -13,11 +14,20 @@
     <link rel="stylesheet" href="navigation-styles.css">
     <!-- Font Awesome 아이콘 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <!-- Google Fonts - Gowun Dodum -->
+    <link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="container">
-        <!-- 현재 시트 이름 표시 -->
-        <div id="current-sheet-name"></div>
+        <!-- 상단 헤더 영역 -->
+        <div class="header-container">
+            <div id="current-sheet-name"></div>
+            <!-- 사용자 이름 변경 버튼 -->
+            <button id="change-name-btn" class="name-change-btn">
+                <i class="fas fa-user-edit"></i>  <!--이름 변경 아이콘-->
+            </button>
+            
+        </div>
         <div id="loading" class="loading-container">
             <div class="loading-spinner"></div>
             <div class="loading-text">데이터를 불러오는 중...</div>

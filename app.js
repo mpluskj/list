@@ -10,8 +10,10 @@ window.appState = {
     initialized: false,
     apiLoaded: false,
     spreadsheetLoaded: false,
-    error: null
+    error: null,
+    userName: localStorage.getItem('userName') || null
 };
+
 
 // 설정
 const CONFIG = {
@@ -24,10 +26,12 @@ const CONFIG = {
     }
 };
 
+
 // 전역 변수
 let currentSheet = null;
 let spreadsheetInfo = null;
 let availableSheets = []; // 사용 가능한 시트 목록 저장
+let cachedSheetData = {}; // 시트 데이터 캐시 저장소
 
 // 스와이프 감지를 위한 변수
 let touchStartX = 0;
@@ -40,11 +44,71 @@ let loadingTimeout;
 // 페이지 로드 시 초기화
 document.addEventListener('DOMContentLoaded', initializeApp);
 
+// 사용자 이름 변경 버튼 이벤트 핸들러
+function setupNameChangeButton() {
+    // 기존 버튼 제거 (중복 방지)
+    const existingBtn = document.getElementById('change-name-btn');
+    if (existingBtn) existingBtn.remove();
+    
+    const changeNameBtn = document.createElement('button');
+    changeNameBtn.id = 'change-name-btn';
+    changeNameBtn.className = 'name-change-btn';
+    changeNameBtn.innerHTML = '<i class="fas fa-user-edit"></i>';
+    changeNameBtn.title = '이름 변경';
+    changeNameBtn.style.display = 'flex';
+    changeNameBtn.style.alignItems = 'center';
+    changeNameBtn.style.justifyContent = 'center';
+    changeNameBtn.style.width = '32px';
+    changeNameBtn.style.height = '32px';
+    changeNameBtn.style.margin = '0 auto';
+    changeNameBtn.style.borderRadius = '50%';
+    changeNameBtn.style.backgroundColor = '#f0f0f0';
+    
+    // 클릭 이벤트 핸들러
+    changeNameBtn.onclick = function() {
+        const newName = prompt('새로운 이름을 입력하세요:', window.appState.userName || '');
+        if (newName !== null) {
+            window.appState.userName = newName;
+            localStorage.setItem('userName', newName);
+            // 화면 새로고침
+            location.reload();
+        }
+    };
+    
+    // 헤더 영역 우측에 버튼 추가
+    const header = document.querySelector('header');
+    if (header) {
+        changeNameBtn.style.position = 'fixed';
+        changeNameBtn.style.top = '10px';
+        changeNameBtn.style.right = '10px';
+        changeNameBtn.style.margin = '0';
+        changeNameBtn.style.zIndex = '1000';
+        header.appendChild(changeNameBtn);
+    } else {
+        // 헤더가 없으면 body에 직접 추가
+        changeNameBtn.style.position = 'fixed';
+        changeNameBtn.style.top = '10px';
+        changeNameBtn.style.right = '10px';
+        changeNameBtn.style.margin = '0';
+        changeNameBtn.style.zIndex = '1000';
+        document.body.appendChild(changeNameBtn);
+    }
+}
+
+// 이름 변경 버튼 설정
+document.addEventListener('DOMContentLoaded', setupNameChangeButton);
+
 // 로딩 메시지 관리를 위한 유틸리티 함수 추가
 function updateLoadingMessage(message) {
     const loadingElement = document.getElementById('loading');
     if (loadingElement) {
-        loadingElement.innerHTML = message;
+        loadingElement.innerHTML = `
+            <div class="loading-container">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">${message}</div>
+                <div class="loading-time">로딩 중... (약 2초 소요 예정)</div>
+            </div>
+        `;
     }
 }
 
@@ -94,6 +158,15 @@ function optimizeForMobile() {
 
 function initializeApp() {
     window.appState.initialized = true;
+    
+    // 사용자 이름 확인 및 입력 요청
+    if (!window.appState.userName) {
+        const userName = prompt('사용자 이름을 입력해주세요:', '');
+        if (userName) {
+            localStorage.setItem('userName', userName);
+            window.appState.userName = userName;
+        }
+    }
     
     // 모바일 최적화
     optimizeForMobile();
@@ -220,6 +293,12 @@ function initClient() {
 function getSpreadsheetInfo() {
     console.log('스프레드시트 정보 요청 중');
     
+    // 캐시된 데이터가 있으면 사용
+    const cachedInfo = getCachedData('spreadsheetInfo');
+    if (cachedInfo) {
+        return Promise.resolve(cachedInfo);
+    }
+    
     return gapi.client.sheets.spreadsheets.get({
         spreadsheetId: CONFIG.SPREADSHEET_ID,
         includeGridData: false
@@ -298,56 +377,6 @@ function setupNavigationButtons() {
         if (existingNav) {
             existingNav.style.display = 'none';
         }
-        return;
-    }
-    
-    // 네비게이션 컨테이너 생성
-    const navContainer = document.createElement('div');
-    navContainer.id = 'nav-container';
-    navContainer.className = 'navigation-buttons';
-    
-    // 현재 시트 인덱스 확인
-    const currentIndex = availableSheets.findIndex(sheet => sheet.properties.title === currentSheet);
-    const isFirstSheet = currentIndex === 0;
-    const isLastSheet = currentIndex === availableSheets.length - 1;
-    
-    // 이전 버튼 생성
-    const prevButton = document.createElement('button');
-    prevButton.id = 'prev-sheet-btn';
-    prevButton.className = 'nav-button';
-    prevButton.innerHTML = '<i class="fas fa-arrow-left"></i>';
-    prevButton.title = '이전 시트';
-    prevButton.addEventListener('click', navigateToPreviousSheet);
-    
-    // 첫 번째 시트인 경우 이전 버튼 숨김
-    if (isFirstSheet) {
-        prevButton.style.visibility = 'hidden';
-    }
-    
-    // 다음 버튼 생성
-    const nextButton = document.createElement('button');
-    nextButton.id = 'next-sheet-btn';
-    nextButton.className = 'nav-button';
-    nextButton.innerHTML = '<i class="fas fa-arrow-right"></i>';
-    nextButton.title = '다음 시트';
-    nextButton.addEventListener('click', navigateToNextSheet);
-    
-    // 마지막 시트인 경우 다음 버튼 숨김
-    if (isLastSheet) {
-        nextButton.style.visibility = 'hidden';
-    }
-    
-    // 버튼을 컨테이너에 추가
-    navContainer.appendChild(prevButton);
-    navContainer.appendChild(nextButton);
-    
-    // 컨테이너를 controls 요소에 추가
-    const controls = document.querySelector('.controls');
-    if (controls) {
-        controls.appendChild(navContainer);
-    } else {
-        // controls 요소가 없으면 container에 직접 추가
-        document.querySelector('.container').appendChild(navContainer);
     }
 }
 
@@ -416,7 +445,31 @@ function getSheetWithFormatting() {
     
     console.log(`시트 데이터 요청 중: ${sheetName}, 범위: ${displayRange || '전체'}`);
     
-    // 스프레드시트 정보 가져오기 (데이터 + 서식 + 열 너비 정보)
+    // 캐시에서 데이터 확인
+    const cachedData = getCachedData(`sheetData_${sheetName}`);
+    if (cachedData) {
+        console.log('캐시에서 시트 데이터 로드 완료');
+        
+        // 로딩 숨기기
+        hideLoading();
+        
+        if (!cachedData.sheets || cachedData.sheets.length === 0) {
+            document.getElementById('content').innerHTML = '<p>데이터를 찾을 수 없습니다.</p>';
+            return;
+        }
+        
+        const sheet = cachedData.sheets[0];
+        const gridData = sheet.data[0];
+        const merges = sheet.merges || [];
+        
+        displayFormattedData(gridData, merges, sheet.properties, displayRange);
+        updateNavigationButtons();
+        updateSheetIndicator();
+        updateCurrentSheetName();
+        return;
+    }
+    
+    // 캐시에 없으면 API 호출
     gapi.client.sheets.spreadsheets.get({
         spreadsheetId: CONFIG.SPREADSHEET_ID,
         ranges: [`${sheetName}`],
@@ -424,6 +477,9 @@ function getSheetWithFormatting() {
         fields: '*' // 모든 필드 가져오기 (열 너비 정보 포함)
     }).then(response => {
         console.log('시트 데이터 수신 완료');
+        
+        // 캐시에 저장
+        storage.cacheSheetData(CONFIG.SPREADSHEET_ID, sheetName, response.result);
         
         // 로딩 숨기기
         hideLoading();
@@ -478,21 +534,8 @@ function updateCurrentSheetName() {
 
 // 현재 시트에 따라 네비게이션 버튼 업데이트
 function updateNavigationButtons() {
-    if (availableSheets.length <= 1) return; // 시트가 1개 이하면 무시
-    
-    const currentIndex = availableSheets.findIndex(sheet => sheet.properties.title === currentSheet);
-    const prevButton = document.getElementById('prev-sheet-btn');
-    const nextButton = document.getElementById('next-sheet-btn');
-    
-    // 첫 번째 시트인 경우 이전 버튼 숨김
-    if (prevButton) {
-        prevButton.style.visibility = currentIndex === 0 ? 'hidden' : 'visible';
-    }
-    
-    // 마지막 시트인 경우 다음 버튼 숨김
-    if (nextButton) {
-        nextButton.style.visibility = currentIndex === availableSheets.length - 1 ? 'hidden' : 'visible';
-    }
+    // 시트가 1개 이하면 무시
+    if (availableSheets.length <= 1) return;
 }
 
 // 시트 인디케이터 업데이트 - 클릭 기능 추가
