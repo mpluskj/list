@@ -20,7 +20,7 @@ const CONFIG = {
     API_KEY: 'AIzaSyA2NydJpV5ywSnDbXFlliIHs3Xp5aP_6sI',
     SPREADSHEET_ID: '10KLxOQJiTDkojp9n1oXsOzqswhelQjJID8UXVR8irKI',
     DEFAULT_RANGE: '계획표', // 기본 시트 이름
-    ALLOWED_SHEETS: '계획표', // 허용된 시트 목록
+    ALLOWED_SHEETS: ['계획표'], // 허용된 시트 목록
     DISPLAY_RANGES: {
         // 시트별 표시 범위 설정 (A1 표기법)
         '계획표': 'B1:C287'    // 계획표는 B1:C287까지만 표시
@@ -324,7 +324,7 @@ function setupSheets() {
     }
     
     // 허용된 시트 목록 정의
-    const allowedSheets = '계획표';
+    const allowedSheets = ['계획표'];
     
     // 허용된 시트만 필터링
     availableSheets = spreadsheetInfo.sheets.filter(sheet => {
