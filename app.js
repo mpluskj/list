@@ -21,10 +21,6 @@ const CONFIG = {
     SPREADSHEET_ID: '10KLxOQJiTDkojp9n1oXsOzqswhelQjJID8UXVR8irKI',
     DEFAULT_RANGE: '계획표', // 기본 시트 이름
     ALLOWED_SHEETS: ['계획표'], // 허용된 시트 목록
-    DISPLAY_RANGES: {
-        // 시트별 표시 범위 설정 (A1 표기법)
-        '계획표': 'B1:C287'    // 계획표는 B1:C287까지만 표시
-    }
 };
 
 
@@ -32,12 +28,84 @@ const CONFIG = {
 let currentSheet = null;
 let spreadsheetInfo = null;
 let availableSheets = []; // 사용 가능한 시트 목록 저장
-let cachedSheetData = {}; // 시트 데이터 캐시 저장소
+let currentWeekIndex = 0; // 현재 표시 중인 주차 인덱스 (0부터 시작)
+const weekRanges = [ // 각 주차의 시작/끝 행 정의 (1-based for API)
+    { startRow: 1, endRow: 36 },  // 1주차 (1-36행)
+    { startRow: 37, endRow: 72 },  // 2주차 (37-72행)
+    { startRow: 73, endRow: 108 }, // 3주차 (73-108행)
+    { startRow: 109, endRow: 144 },// 4주차 (109-144행)
+    { startRow: 145, endRow: 180 }, // 5주차 (145-180행)
+    { startRow: 181, endRow: 216 }, // 6주차 (181-216행)
+    { startRow: 217, endRow: 252 }, // 7주차 (217-252행)
+    { startRow: 253, endRow: 288 }  // 8주차 (253-288행)
+];
+
+/**
+ * "MM월 DD-DD일" 형식의 문자열을 파싱하여 시작 및 종료 Date 객체를 반환합니다.
+ * 현재 연도를 사용하여 Date 객체를 생성합니다.
+ * @param {string} dateRangeString "MM월 DD-DD일" 형식의 주차 날짜 문자열
+ * @returns {{startDate: Date, endDate: Date}|null} 파싱된 시작 및 종료 날짜 객체 또는 null
+ */
+function parseDateRange(dateRangeString) {
+    if (!dateRangeString) return null;
+
+    const currentYear = new Date().getFullYear();
+    const parts = dateRangeString.match(/(\d{1,2})월 (\d{1,2})-(\d{1,2})일/);
+    if (!parts || parts.length < 4) {
+        return null;
+    }
+
+    const month = parseInt(parts[1], 10) - 1; // 월은 0-11
+    const startDay = parseInt(parts[2], 10);
+    const endDay = parseInt(parts[3], 10);
+
+    const startDate = new Date(currentYear, month, startDay);
+    const endDate = new Date(currentYear, month, endDay);
+    
+    // 연도 경계 처리 (예: 12월 25 - 1월 1일)
+    // 시작 날짜가 종료 날짜보다 크면 (예: 12월 25일 - 1월 1일), 종료 날짜의 연도를 +1 해줌
+    if (startDate > endDate) {
+        endDate.setFullYear(currentYear + 1);
+    }
+
+    return { startDate, endDate };
+}
+
+async function findMatchingWeekIndex() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // 시간 정보 제거하여 날짜만 비교
+
+    for (let i = 0; i < weekRanges.length; i++) {
+        const range = `${currentSheet}!B${weekRanges[i].startRow + 1}`;
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SPREADSHEET_ID}/values/${range}?key=${CONFIG.API_KEY}`;
+        
+        try {
+            const response = await fetch(url);
+            const result = await response.json();
+            
+            if(result.values && result.values.length > 0) {
+                const dateRangeString = result.values[0][0];
+                const dateRange = parseDateRange(dateRangeString);
+                
+                if (dateRange) {
+                    if (today >= dateRange.startDate && today <= dateRange.endDate) {
+                        return i;
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`Error fetching week date for range ${range}:`, error);
+        }
+    }
+    return 0; // 일치하는 주차를 찾지 못하면 첫 번째 주차 반환
+}
 
 // 스와이프 감지를 위한 변수
 let touchStartX = 0;
+let touchStartY = 0;
 let touchEndX = 0;
-const swipeThreshold = 100; // 스와이프로 인식할 최소 거리 (픽셀)
+let touchEndY = 0;
+const swipeThreshold = 50; // 스와이프로 인식할 최소 거리 (픽셀) - 감도 향상
 
 // 로딩 타임아웃 설정
 let loadingTimeout;
@@ -67,7 +135,15 @@ function setupNameChangeButton() {
     
     // 클릭 이벤트 핸들러
     changeNameBtn.onclick = function() {
-        const newName = prompt('새로운 이름을 입력하세요:', window.appState.userName || '');
+        let newName = null;
+        try {
+            newName = prompt('새로운 이름을 입력하세요:', window.appState.userName || '');
+        } catch (e) {
+            console.warn('prompt() not supported');
+            alert('이름 변경을 위해 브라우저 설정에서 팝업을 허용해주세요.');
+            return;
+        }
+
         if (newName !== null) {
             window.appState.userName = newName;
             localStorage.setItem('userName', newName);
@@ -96,10 +172,19 @@ function setupNameChangeButton() {
     }
 }
 
-// 이름 변경 버튼 설정
-document.addEventListener('DOMContentLoaded', setupNameChangeButton);
+// 현재 표시할 범위 문자열 생성 도우미 함수
+function getDisplayRange() {
+    const range = weekRanges[currentWeekIndex];
+    const sheetName = currentSheet || CONFIG.DEFAULT_RANGE;
+    return `${sheetName}!A${range.startRow}:D${range.endRow}`;
+}
 
-// 로딩 메시지 관리를 위한 유틸리티 함수 추가
+// 버튼 설정 초기화
+document.addEventListener('DOMContentLoaded', () => {
+    setupNameChangeButton();
+});
+
+// 로딩 메시지 관리를 위한 유티리티 함수 추가
 function updateLoadingMessage(message) {
     const loadingElement = document.getElementById('loading');
     if (loadingElement) {
@@ -118,6 +203,8 @@ function showLoading() {
     const loadingElement = document.getElementById('loading');
     if (loadingElement) {
         loadingElement.style.display = 'block';
+        // 기존 로딩 스피너 대신 스켈레톤 UI 표시는 getSheetWithFormatting에서 처리하거나
+        // 여기서 기본적인 텍스트만 유지
         loadingElement.innerHTML = `
             <div class="loading-spinner"></div>
             <div class="loading-text">데이터를 불러오는 중...</div>
@@ -129,6 +216,12 @@ function hideLoading() {
     const loadingElement = document.getElementById('loading');
     if (loadingElement) {
         loadingElement.style.display = 'none';
+    }
+    
+    // 새로고침 버튼 스피닝 중지
+    const refreshBtn = document.getElementById('refresh-btn');
+    if (refreshBtn) {
+        refreshBtn.classList.remove('spinning');
     }
 }
 
@@ -162,33 +255,80 @@ function initializeApp() {
     
     // 사용자 이름 확인 및 입력 요청
     if (!window.appState.userName) {
-        const userName = prompt('사용자 이름을 입력해주세요:', '');
+        let userName = null;
+        try {
+            userName = prompt('사용자 이름을 입력해주세요:', '');
+        } catch (e) {
+            console.warn('prompt() not supported');
+            userName = 'Guest';
+        }
+        
         if (userName) {
             localStorage.setItem('userName', userName);
             window.appState.userName = userName;
+        } else if (userName === null && !window.appState.userName) {
+             // 취소했거나 입력하지 않은 경우 기본값 설정
+             window.appState.userName = 'Guest';
+             localStorage.setItem('userName', 'Guest');
         }
     }
     
     // 모바일 최적화
     optimizeForMobile();
     
-    // 새로고침 버튼 제거
-    const refreshBtn = document.getElementById('refreshBtn');
+    // 새로고침 버튼
+    const refreshBtn = document.getElementById('refresh-btn');
     if (refreshBtn) {
-        refreshBtn.parentNode.removeChild(refreshBtn);
+        refreshBtn.addEventListener('click', async () => {
+            // 스피닝 애니메이션 시작
+            refreshBtn.classList.add('spinning');
+            
+            // 로딩 표시
+            showLoading();
+            console.log('새로고침 및 오늘 날짜로 이동 요청됨');
+            
+            // 오늘 날짜에 해당하는 주차 찾기
+            const todayIndex = await findMatchingWeekIndex();
+            
+            // 해당 주차로 이동하며 강제 새로고침
+            displayWeek(todayIndex, true);
+        });
     }
-    
-    // 스와이프 이벤트 리스너 설정
-    setupSwipeListeners();
-    
-    // 키보드 이벤트 리스너 설정
+
+    // 키보드 단축키
     document.addEventListener('keydown', function(e) {
         if (e.key === 'ArrowLeft') {
-            navigateToPreviousSheet();
+            navigateToPreviousWeek();
         } else if (e.key === 'ArrowRight') {
-            navigateToNextSheet();
+            navigateToNextWeek();
         }
     });
+    
+    // 페이지네이션 점 초기화
+    setupPaginationDots();
+
+    // 상단 시트 전환 버튼 이벤트 리스너 설정
+    const kslBtn = document.getElementById('ksl-sheet-btn');
+    const koBtn = document.getElementById('ko-sheet-btn');
+    
+    if (kslBtn) {
+        kslBtn.addEventListener('click', () => {
+            if (currentSheet !== 'KSL계획표') {
+                switchToSheet('KSL계획표');
+            }
+        });
+    }
+    
+    if (koBtn) {
+        koBtn.addEventListener('click', () => {
+            if (currentSheet !== 'Ko계획표') {
+                switchToSheet('Ko계획표');
+            }
+        });
+    }
+    
+    // 스와이프 리스너 설정
+    setupSwipeListeners();
     
     // 로딩 타임아웃 설정 (15초)
     loadingTimeout = setTimeout(handleLoadingTimeout, 15000);
@@ -196,14 +336,8 @@ function initializeApp() {
     // 로딩 표시
     showLoading();
     
-    // Google API 클라이언트 로드
-    try {
-        gapi.load('client', initClient);
-    } catch (error) {
-        console.error('GAPI 로드 오류:', error);
-        window.appState.error = error;
-        handleLoadingTimeout();
-    }
+    // 데이터 로딩 시작
+    initDataLoading();
 }
 
 // 로딩 타임아웃 처리
@@ -226,16 +360,15 @@ function handleLoadingTimeout() {
 
 // 스와이프 이벤트 리스너 설정
 function setupSwipeListeners() {
-    const contentArea = document.getElementById('content');
-    
-    // 터치 시작 이벤트
-    contentArea.addEventListener('touchstart', function(e) {
+    // document 전체에서 터치 이벤트 감지하도록 변경
+    document.addEventListener('touchstart', function(e) {
         touchStartX = e.changedTouches[0].screenX;
+        touchStartY = e.changedTouches[0].screenY;
     }, { passive: true });
     
-    // 터치 종료 이벤트
-    contentArea.addEventListener('touchend', function(e) {
+    document.addEventListener('touchend', function(e) {
         touchEndX = e.changedTouches[0].screenX;
+        touchEndY = e.changedTouches[0].screenY;
         handleSwipe();
     }, { passive: true });
 }
@@ -243,77 +376,117 @@ function setupSwipeListeners() {
 // 스와이프 처리
 function handleSwipe() {
     // 스와이프 거리 계산
-    const swipeDistance = touchEndX - touchStartX;
+    const swipeDistanceX = touchEndX - touchStartX;
+    const swipeDistanceY = touchEndY - touchStartY;
+    
+    // 수직 이동이 수평 이동보다 크면 스크롤로 간주하여 무시
+    if (Math.abs(swipeDistanceY) > Math.abs(swipeDistanceX)) {
+        return;
+    }
     
     // 스와이프 임계값보다 크면 처리
-    if (Math.abs(swipeDistance) >= swipeThreshold) {
-        if (swipeDistance > 0) {
-            // 오른쪽으로 스와이프 - 이전 시트로 이동
-            navigateToPreviousSheet();
+    if (Math.abs(swipeDistanceX) >= swipeThreshold) {
+        if (swipeDistanceX > 0) {
+            // 오른쪽으로 스와이프 - 이전 주로 이동
+            navigateToPreviousWeek();
         } else {
-            // 왼쪽으로 스와이프 - 다음 시트로 이동
-            navigateToNextSheet();
+            // 왼쪽으로 스와이프 - 다음 주로 이동
+            navigateToNextWeek();
         }
     }
 }
 
-// API 클라이언트 초기화
-function initClient() {
-    console.log('API 클라이언트 초기화 시작');
+// 데이터 로딩 초기화
+async function initDataLoading() {
+    console.log('데이터 로딩 시작');
     
-    gapi.client.init({
-        apiKey: CONFIG.API_KEY,
-        discoveryDocs: ["https://sheets.googleapis.com/$discovery/rest?version=v4"],
-    }).then(() => {
+    try {
+        // 스프레드시트 정보 가져오기
+        await getSpreadsheetInfo();
+        console.log('스프레드시트 정보 가져오기 완료');
+        
         // 타임아웃 제거
         clearTimeout(loadingTimeout);
-        
         window.appState.apiLoaded = true;
-        console.log('API 클라이언트 초기화 완료');
-        
-        // 스프레드시트 정보 가져오기
-        return getSpreadsheetInfo();
-    }).then(() => {
-        console.log('스프레드시트 정보 가져오기 완료');
         
         // 시트 목록 설정 및 네비게이션 버튼 초기화
         setupSheets();
-        // 기본 시트 데이터 가져오기
-        getSheetWithFormatting();
-    }).catch(error => {
+        
+        // 현재 시트 기준으로 현재 주차 찾기
+        currentWeekIndex = await findMatchingWeekIndex();
+    
+        // 현재 주차 데이터 가져오기
+        displayWeek(currentWeekIndex);
+    } catch (error) {
         // 타임아웃 제거
         clearTimeout(loadingTimeout);
         
         window.appState.error = error;
-        console.error('API 초기화 오류:', error);
+        console.error('데이터 로딩 오류:', error);
         handleErrors(error);
-    });
+    }
 }
 
 // 스프레드시트 정보 가져오기
 function getSpreadsheetInfo() {
     console.log('스프레드시트 정보 요청 중');
     
-    // 캐시된 데이터가 있으면 사용
-    const cachedInfo = getCachedData('spreadsheetInfo');
-    if (cachedInfo) {
-        return Promise.resolve(cachedInfo);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SPREADSHEET_ID}?key=${CONFIG.API_KEY}&includeGridData=false`;
+
+    return fetch(url)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            window.appState.spreadsheetLoaded = true;
+            console.log('스프레드시트 정보 수신 완료');
+            spreadsheetInfo = data;
+            return spreadsheetInfo;
+        })
+        .catch(error => {
+            window.appState.error = error;
+            console.error('스프레드시트 정보 가져오기 오류:', error);
+            handleErrors(error);
+            throw error;
+        });
+}
+
+// 네비게이션 버튼 설정
+function setupNavigationButtons() {
+    const navContainer = document.getElementById('navigation-container');
+    const sheetNav = document.getElementById('sheet-navigation');
+    
+    // 시트가 1개 이하면 네비게이션 숨김
+    if (availableSheets.length <= 1) {
+        if (navContainer) navContainer.style.display = 'none';
+        return;
     }
     
-    return gapi.client.sheets.spreadsheets.get({
-        spreadsheetId: CONFIG.SPREADSHEET_ID,
-        includeGridData: false
-    }).then(response => {
-        window.appState.spreadsheetLoaded = true;
-        console.log('스프레드시트 정보 수신 완료');
-        spreadsheetInfo = response.result;
-        return spreadsheetInfo;
-    }).catch(error => {
-        window.appState.error = error;
-        console.error('스프레드시트 정보 가져오기 오류:', error);
-        handleErrors(error);
-        return null;
-    });
+    if (navContainer) {
+        navContainer.style.display = 'flex'; // flex로 다시 보이게 설정
+    }
+    
+    // 버튼 동적 생성 (기존 하드코딩 제거 및 향후 확장 대비)
+    if (sheetNav) {
+        sheetNav.innerHTML = ''; // 기존 버튼 초기화
+        
+        availableSheets.forEach(sheet => {
+            const btn = document.createElement('button');
+            btn.textContent = sheet.properties.title;
+            btn.className = currentSheet === sheet.properties.title ? 'selected' : '';
+            
+            btn.addEventListener('click', () => {
+                if (currentSheet !== sheet.properties.title) {
+                    switchToSheet(sheet.properties.title);
+                }
+            });
+            
+            sheetNav.appendChild(btn);
+        });
+    }
 }
 
 // 시트 설정 및 네비게이션 버튼 초기화
@@ -322,9 +495,9 @@ function setupSheets() {
         console.error('스프레드시트 정보가 없습니다');
         return;
     }
-    
-    // 허용된 시트 목록 정의
-    const allowedSheets = ['계획표'];
+
+    // 허용된 시트 목록 정의 (CONFIG 사용)
+    const allowedSheets = CONFIG.ALLOWED_SHEETS;
     
     // 허용된 시트만 필터링
     availableSheets = spreadsheetInfo.sheets.filter(sheet => {
@@ -371,224 +544,231 @@ function setupSheets() {
     setupNavigationButtons();
 }
 
-// 네비게이션 버튼 설정
-function setupNavigationButtons() {
-    // 시트가 1개 이하면 네비게이션 버튼 생성하지 않음
-    if (availableSheets.length <= 1) {
-        const existingNav = document.getElementById('nav-container');
-        if (existingNav) {
-            existingNav.style.display = 'none';
-        }
-    }
-}
-
-// 이전 시트로 이동
-function navigateToPreviousSheet() {
-    if (availableSheets.length <= 1) return; // 시트가 1개 이하면 무시
-    
-    const currentIndex = availableSheets.findIndex(sheet => sheet.properties.title === currentSheet);
-    if (currentIndex > 0) {
-        // 이전 시트로 이동
-        const prevSheet = availableSheets[currentIndex - 1].properties.title;
-        switchToSheet(prevSheet);
-    } else {
-        // 첫 번째 시트면 마지막 시트로 순환
-        const lastSheet = availableSheets[availableSheets.length - 1].properties.title;
-        switchToSheet(lastSheet);
-    }
-}
-
-// 다음 시트로 이동
-function navigateToNextSheet() {
-    if (availableSheets.length <= 1) return; // 시트가 1개 이하면 무시
-    
-    const currentIndex = availableSheets.findIndex(sheet => sheet.properties.title === currentSheet);
-    if (currentIndex < availableSheets.length - 1) {
-        // 다음 시트로 이동
-        const nextSheet = availableSheets[currentIndex + 1].properties.title;
-        switchToSheet(nextSheet);
-    } else {
-        // 마지막 시트면 첫 번째 시트로 순환
-        const firstSheet = availableSheets[0].properties.title;
-        switchToSheet(firstSheet);
-    }
+// 현재 시트 이름을 UI에 표시
+function updateCurrentSheetDisplayName() {
+    // This function is no longer needed as the sheet name display is removed.
 }
 
 // 특정 시트로 전환
-function switchToSheet(sheetName) {
+async function switchToSheet(sheetName) {
     // 시트 변경 처리
     currentSheet = sheetName;
     
     // 로딩 표시
     showLoading();
+
+    // 버튼 스타일 업데이트
+    setupNavigationButtons();
     
+    // 현재 주차 인덱스를 찾음
+    currentWeekIndex = await findMatchingWeekIndex();
+
     // 시트 데이터 로드 (애니메이션 효과 추가)
     document.getElementById('content').classList.add('sheet-transition');
     
     // 시트 전환 방향에 따른 애니메이션 클래스 추가
     setTimeout(() => {
-        getSheetWithFormatting();
+        displayWeek(currentWeekIndex);
         setTimeout(() => {
             document.getElementById('content').classList.remove('sheet-transition');
         }, 300);
     }, 50);
 }
 
+/**
+ * 특정 주차의 데이터를 화면에 표시합니다.
+ * @param {number} weekIndex 표시할 주차의 인덱스
+ * @param {boolean} forceRefresh 강제 새로고침 여부
+ */
+function displayWeek(weekIndex, forceRefresh = false) {
+    if (weekIndex < 0 || weekIndex >= weekRanges.length) {
+        console.error('유효하지 않은 주차 인덱스:', weekIndex);
+        return;
+    }
+    
+    currentWeekIndex = weekIndex;
+    
+    // 페이지네이션 점 업데이트
+    updatePaginationDots();
+    
+    const displayRange = getDisplayRange();
+
+    getSheetWithFormatting(displayRange, forceRefresh);
+}
+
+
+// 이전 주로 이동
+function navigateToPreviousWeek() {
+    let newIndex = currentWeekIndex - 1;
+    if (newIndex < 0) {
+        newIndex = weekRanges.length - 1; // 마지막 주로 순환
+    }
+    displayWeek(newIndex);
+}
+
+// 다음 주로 이동
+function navigateToNextWeek() {
+    let newIndex = currentWeekIndex + 1;
+    if (newIndex >= weekRanges.length) {
+        newIndex = 0; // 첫 번째 주로 순환
+    }
+    displayWeek(newIndex);
+}
+
+// 페이지네이션 점 설정
+function setupPaginationDots() {
+    const dotsContainer = document.getElementById('pagination-dots');
+    if (!dotsContainer) return;
+    
+    dotsContainer.innerHTML = '';
+    
+    weekRanges.forEach((_, index) => {
+        const dot = document.createElement('div');
+        dot.className = 'pagination-dot';
+        // 접근성을 위한 ARIA 속성 추가
+        dot.setAttribute('role', 'button');
+        dot.setAttribute('aria-label', `${index + 1}주차로 이동`);
+        dot.setAttribute('tabindex', '0');
+        
+        if (index === currentWeekIndex) {
+            dot.classList.add('active');
+            dot.setAttribute('aria-current', 'true');
+        }
+        
+        dot.addEventListener('click', () => {
+            displayWeek(index);
+        });
+        
+        // 키보드 접근성 지원
+        dot.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                displayWeek(index);
+            }
+        });
+        
+        dotsContainer.appendChild(dot);
+    });
+}
+
+// 페이지네이션 점 업데이트
+function updatePaginationDots() {
+    const dots = document.querySelectorAll('.pagination-dot');
+    dots.forEach((dot, index) => {
+        if (index === currentWeekIndex) {
+            dot.classList.add('active');
+            dot.setAttribute('aria-current', 'true');
+        } else {
+            dot.classList.remove('active');
+            dot.removeAttribute('aria-current');
+        }
+    });
+}
+
+/**
+ * 현재 주차의 "주날짜" 정보를 UI에 표시합니다.
+ */
+async function updateWeekDisplay() {
+    // This function is no longer needed as the week display is part of the table.
+}
+
 // 스프레드시트 데이터와 서식 가져오기
-function getSheetWithFormatting() {
+function getSheetWithFormatting(displayRange, forceRefresh = false) {
     // 콘텐츠 영역 초기화
     document.getElementById('content').innerHTML = '';
     
-    // 사용할 시트 이름 결정
-    const sheetName = currentSheet || CONFIG.DEFAULT_RANGE;
-    
-    // 표시할 범위 결정
-    const displayRange = CONFIG.DISPLAY_RANGES[sheetName] || null;
-    
-    console.log(`시트 데이터 요청 중: ${sheetName}, 범위: ${displayRange || '전체'}`);
-    
-    // 캐시에서 데이터 확인
-    const cachedData = getCachedData(`sheetData_${sheetName}`);
-    if (cachedData) {
-        console.log('캐시에서 시트 데이터 로드 완료');
-        
-        // 로딩 숨기기
-        hideLoading();
-        
-        if (!cachedData.sheets || cachedData.sheets.length === 0) {
-            document.getElementById('content').innerHTML = '<p>데이터를 찾을 수 없습니다.</p>';
-            return;
-        }
-        
-        const sheet = cachedData.sheets[0];
-        const gridData = sheet.data[0];
-        const merges = sheet.merges || [];
-        
-        displayFormattedData(gridData, merges, sheet.properties, displayRange);
-        updateNavigationButtons();
-        updateSheetIndicator();
-        updateCurrentSheetName();
-        return;
-    }
-    
-    // 캐시에 없으면 API 호출
-    gapi.client.sheets.spreadsheets.get({
-        spreadsheetId: CONFIG.SPREADSHEET_ID,
-        ranges: [`${sheetName}`],
-        includeGridData: true,
-        fields: '*' // 모든 필드 가져오기 (열 너비 정보 포함)
-    }).then(response => {
-        console.log('시트 데이터 수신 완료');
-        
-        // 캐시에 저장
-        storage.cacheSheetData(CONFIG.SPREADSHEET_ID, sheetName, response.result);
-        
-        // 로딩 숨기기
-        hideLoading();
-        
-        if (!response.result.sheets || response.result.sheets.length === 0) {
-            document.getElementById('content').innerHTML = '<p>데이터를 찾을 수 없습니다.</p>';
-            return;
-        }
-        
-        const sheet = response.result.sheets[0];
-        const gridData = sheet.data[0];
-        
-        // 병합 셀 정보 가져오기
-        const merges = sheet.merges || [];
-        
-        // 데이터와 서식 정보 함께 처리 (표시 범위 전달)
-        displayFormattedData(gridData, merges, sheet.properties, displayRange);
-        
-        // 네비게이션 버튼 및 인디케이터 업데이트
-        updateNavigationButtons();
-        updateSheetIndicator();
-        
-        // 현재 시트 이름 표시
-        updateCurrentSheetName();
-        
-    }).catch(error => {
-        console.error('시트 데이터 가져오기 오류:', error);
-        window.appState.error = error;
-        
-        // 로딩 숨기기
-        hideLoading();
-        handleErrors(error);
-    });
-}
+    console.log(`시트 데이터 요청 중: ${displayRange}`);
 
+    // 캐시 키 생성
+    const cacheKey = `sheet_data_${CONFIG.SPREADSHEET_ID}_${displayRange}`;
 
-// 현재 시트 이름 업데이트
-function updateCurrentSheetName() {
-    const sheetNameDisplay = document.getElementById('current-sheet-name');
-    if (!sheetNameDisplay) return;
-    
-    // 시트가 1개 이하면 시트 이름 숨김
-    if (availableSheets.length <= 1) {
-        sheetNameDisplay.style.display = 'none';
-        return;
-    }
-    
-    // 시트 이름 표시
-    sheetNameDisplay.style.display = 'block';
-    sheetNameDisplay.textContent = currentSheet;
-}
-
-// 현재 시트에 따라 네비게이션 버튼 업데이트
-function updateNavigationButtons() {
-    // 시트가 1개 이하면 무시
-    if (availableSheets.length <= 1) return;
-}
-
-// 시트 인디케이터 업데이트 - 클릭 기능 추가
-function updateSheetIndicator() {
-    // 시트가 1개 이하면 인디케이터 숨김
-    if (availableSheets.length <= 1) {
-        const existingIndicator = document.getElementById('sheet-indicator');
-        if (existingIndicator) {
-            existingIndicator.style.display = 'none';
-        }
-        return;
-    }
-    
-    // 시트 인디케이터 요소가 없으면 생성
-    let indicator = document.getElementById('sheet-indicator');
-    if (!indicator) {
-        indicator = document.createElement('div');
-        indicator.id = 'sheet-indicator';
-        indicator.className = 'sheet-indicator-container';
-        document.getElementById('content').insertAdjacentElement('afterend', indicator);
-    }
-    
-    // 인디케이터 표시
-    indicator.style.display = 'flex';
-    
-    // 인디케이터 내용 생성
-    let dots = '';
-    availableSheets.forEach((sheet, index) => {
-        const isActive = sheet.properties.title === currentSheet;
-        dots += `<span class="indicator-dot ${isActive ? 'active' : ''}" 
-                      data-sheet="${sheet.properties.title}" 
-                      title="${sheet.properties.title}"></span>`;
-    });
-    
-    // 인디케이터 업데이트
-    indicator.innerHTML = dots;
-    
-    // 인디케이터 클릭 이벤트 추가
-    const dotElements = indicator.querySelectorAll('.indicator-dot');
-    dotElements.forEach(dot => {
-        dot.addEventListener('click', function() {
-            const sheetName = this.getAttribute('data-sheet');
-            if (sheetName !== currentSheet) {
-                switchToSheet(sheetName);
+    // 캐시 확인 (강제 새로고침이 아닐 경우)
+    if (!forceRefresh) {
+        const cachedData = sessionStorage.getItem(cacheKey);
+        if (cachedData) {
+            try {
+                const parsedData = JSON.parse(cachedData);
+                // 캐시 유효 시간 확인 (예: 1시간)
+                const now = new Date().getTime();
+                if (now - parsedData.timestamp < 60 * 60 * 1000) {
+                    console.log('캐시된 데이터 사용');
+                    hideLoading();
+                    processAndDisplayData(parsedData.data);
+                    return;
+                }
+            } catch (e) {
+                console.warn('캐시 데이터 파싱 실패:', e);
+                sessionStorage.removeItem(cacheKey);
             }
+        }
+    }
+    
+    // API 호출
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.SPREADSHEET_ID}?key=${CONFIG.API_KEY}&ranges=${encodeURIComponent(displayRange)}&includeGridData=true&fields=sheets(properties,data,merges)`;
+
+    fetch(url)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('시트 데이터 수신 완료');
+            
+            // 데이터 캐싱
+            try {
+                const cacheItem = {
+                    timestamp: new Date().getTime(),
+                    data: data
+                };
+                sessionStorage.setItem(cacheKey, JSON.stringify(cacheItem));
+            } catch (e) {
+                console.warn('데이터 캐싱 실패 (용량 초과 가능성):', e);
+            }
+            
+            hideLoading();
+            
+            if (!data.sheets || data.sheets.length === 0) {
+                document.getElementById('content').innerHTML = '<p>데이터를 찾을 수 없습니다.</p>';
+                return;
+            }
+            
+            processAndDisplayData(data);
+            
+        }).catch(error => {
+            console.error('시트 데이터 가져오기 오류:', error);
+            window.appState.error = error;
+            
+            hideLoading();
+            handleErrors(error);
         });
-    });
+}
+
+// 데이터 처리 및 표시 도우미 함수
+function processAndDisplayData(data) {
+    const sheet = data.sheets[0];
+    const sheetProperties = sheet.properties;
+    const gridData = sheet.data[0];
+    let merges = sheet.merges || [];
+    const currentRange = weekRanges[currentWeekIndex];
+    const displayRange = `${currentSheet || CONFIG.DEFAULT_RANGE}!A${currentRange.startRow}:D${currentRange.endRow}`;
+
+    if (merges) {
+        merges = merges.map(merge => {
+            return {
+                ...merge,
+                startRowIndex: merge.startRowIndex - (currentRange.startRow - 1),
+                endRowIndex: merge.endRowIndex - (currentRange.startRow - 1)
+            };
+        }).filter(merge => merge.startRowIndex >= 0 && merge.endRowIndex > 0);
+    }
+    
+    displayFormattedData(gridData, merges, sheetProperties, displayRange);
 }
 
 // 서식이 적용된 데이터 표시
-function displayFormattedData(gridData, merges, sheetProperties, displayRange) {
+function displayFormattedData(gridData, merges, sheetProperties, displayRange) { 
     const content = document.getElementById('content');
     
     if (!gridData.rowData || gridData.rowData.length === 0) {
@@ -599,9 +779,18 @@ function displayFormattedData(gridData, merges, sheetProperties, displayRange) {
     try {
         console.log('데이터 포맷팅 시작');
         
-        // 서식 핸들러 호출
         const html = formatHandler.createFormattedTable(gridData, merges, sheetProperties, displayRange);
         content.innerHTML = html;
+
+        // Add event listeners for the new buttons
+        const prevBtn = document.getElementById('prev-week-btn-table');
+        if (prevBtn) {
+            prevBtn.addEventListener('click', navigateToPreviousWeek);
+        }
+        const nextBtn = document.getElementById('next-week-btn-table');
+        if (nextBtn) {
+            nextBtn.addEventListener('click', navigateToNextWeek);
+        }
         
         console.log('병합 셀 적용 시작');
         
@@ -613,7 +802,7 @@ function displayFormattedData(gridData, merges, sheetProperties, displayRange) {
         console.log('열 너비 조정 시작');
         
         // 열 너비 자동 조정
-        adjustColumnWidths();
+        adjustColumnWidths(gridData);
         
         console.log('데이터 표시 완료');
     } catch (error) {
@@ -624,102 +813,49 @@ function displayFormattedData(gridData, merges, sheetProperties, displayRange) {
 }
 
 // 열 너비 자동 조정 함수 - 원본 비율 유지, 줄바꿈 허용
-function adjustColumnWidths() {
+function adjustColumnWidths(gridData) {
     const table = document.querySelector('.sheet-table');
     if (!table) return;
     
-    // 테이블 내 모든 행
     const rows = table.querySelectorAll('tr');
     if (rows.length === 0) return;
     
-    // 컨테이너 너비 확인
     const container = document.querySelector('.container');
     const containerWidth = container.clientWidth;
     const availableWidth = containerWidth - 20; // 여백 고려
     
-    // 첫 번째 행의 셀 수
     const firstRow = rows[0];
     const cellCount = firstRow.cells.length;
     
-    // 기본 열 너비 설정
-    let colWidths = new Array(cellCount).fill(100); // 기본값 100px
-    
-    // 1. 원본 시트의 열 너비 정보 가져오기 (가능한 경우)
-    let originalWidths = [];
-    let hasOriginalWidths = false;
-    
-    if (spreadsheetInfo && spreadsheetInfo.sheets && spreadsheetInfo.sheets.length > 0) {
-        const currentSheetInfo = spreadsheetInfo.sheets.find(s => s.properties.title === currentSheet);
-        if (currentSheetInfo && currentSheetInfo.properties && currentSheetInfo.properties.gridProperties) {
-            // 원본 열 너비 정보 확인
-            if (currentSheetInfo.data && currentSheetInfo.data[0] && currentSheetInfo.data[0].columnMetadata) {
-                originalWidths = currentSheetInfo.data[0].columnMetadata.map(col => col.pixelSize || 100);
-                hasOriginalWidths = true;
-            } 
-            // 다른 경로로 열 너비 정보 확인
-            else if (currentSheetInfo.properties.gridProperties.columnMetadata) {
-                originalWidths = currentSheetInfo.properties.gridProperties.columnMetadata.map(col => col.pixelSize || 100);
-                hasOriginalWidths = true;
-            }
-        }
+    let colWidths = new Array(cellCount).fill(100); 
+
+    if (gridData.columnMetadata) {
+        colWidths = gridData.columnMetadata.map(col => col.pixelSize || 100);
     }
     
-    // 원본 열 너비 정보가 있으면 사용, 없으면 콘텐츠 기반 계산
-    if (hasOriginalWidths && originalWidths.length >= cellCount) {
-        console.log('원본 시트 열 너비 정보 사용:', originalWidths);
-        colWidths = originalWidths.slice(0, cellCount);
-    } else {
-        // 2. 콘텐츠 기반 열 너비 계산
-        let maxContentLengths = new Array(cellCount).fill(0);
-        
-        rows.forEach(row => {
-            Array.from(row.cells).forEach((cell, index) => {
-                if (index >= cellCount) return;
-                
-                // 셀 내용 길이
-                const text = cell.textContent || '';
-                const contentLength = text.length;
-                
-                // 콘텐츠 길이 업데이트
-                maxContentLengths[index] = Math.max(maxContentLengths[index], contentLength);
-            });
-        });
-        
-        // 콘텐츠 길이에 따른 열 너비 계산
-        colWidths = maxContentLengths.map(length => {
-            if (length <= 5) return 60;      // 매우 짧은 텍스트
-            if (length <= 10) return 100;    // 짧은 텍스트
-            if (length <= 20) return 150;    // 중간 텍스트
-            if (length <= 40) return 200;    // 긴 텍스트
-            return 250;                      // 매우 긴 텍스트
-        });
-    }
+    // A열(index 0)과 D열(index 3)의 너비를 50%로 줄임
+    if (colWidths.length > 0) colWidths[0] = colWidths[0] * 0.5;
+    if (colWidths.length > 3) colWidths[3] = colWidths[3] * 0.5;
     
-    // 3. 원본 비율 계산
     const totalOriginalWidth = colWidths.reduce((sum, width) => sum + width, 0);
     const widthRatios = colWidths.map(width => width / totalOriginalWidth);
     
-    console.log('열 너비 비율:', widthRatios);
-    
-    // 4. 반응형 적용 - 사용 가능한 너비에 비율 적용
     const finalWidths = widthRatios.map(ratio => Math.max(Math.floor(ratio * availableWidth), 40));
     
-    // 5. CSS 적용 - 반응형을 위해 %로 설정
     const styleSheet = document.createElement('style');
     let styleRules = '';
     
-    // 테이블 레이아웃 설정
-    styleRules += `.sheet-table { table-layout: fixed; width: 100%; max-width: 100%; }\n`;
+    styleRules += `.sheet-table { table-layout: fixed; width: 100%; max-width: 100%; }
+`;
     
-    // 각 열에 비율 적용
     finalWidths.forEach((width, index) => {
         const widthPercent = (widthRatios[index] * 100).toFixed(2);
         styleRules += `.sheet-table td:nth-child(${index + 1}), .sheet-table th:nth-child(${index + 1}) { 
             width: ${widthPercent}%; 
-        }\n`;
+        }
+`;
     });
     
-    // 모든 셀에 줄바꿈 허용
     styleRules += `
         .sheet-table td, .sheet-table th {
             white-space: normal;
