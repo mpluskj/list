@@ -884,6 +884,11 @@ async function loadNavLinks() {
             document.getElementById('font-manager-select').value = fontManager;
             document.getElementById('font-print-select').value = fontPrint;
 
+            // Cache in localStorage as well, so manager.html and index.html can load instantly!
+            localStorage.setItem('congregationName', congName);
+            localStorage.setItem('fontViewer', fontViewer);
+            localStorage.setItem('fontManager', fontManager);
+
             // Apply Manager Font to body
             ensureFontLoaded(fontManager);
             applyFontToBody(fontManager);
@@ -992,8 +997,10 @@ async function saveNavLinks() {
 
         if (settingsErr) throw settingsErr;
 
-        // 뷰어 페이지의 localStorage 캐시도 즉시 업데이트 (다음 로딩 시 최신값 반영)
+        // localStorage 캐시도 즉시 업데이트 (다음 로딩 시 최신값 반영)
         localStorage.setItem('congregationName', congName);
+        localStorage.setItem('fontViewer', fontViewer);
+        localStorage.setItem('fontManager', fontManager);
 
         // Instantly apply Manager Font to body
         ensureFontLoaded(fontManager);

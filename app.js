@@ -123,6 +123,7 @@ async function setupNavigationButtons() {
 
             window.appState.congregationName = congName;
             localStorage.setItem('congregationName', congName);
+            localStorage.setItem('fontViewer', fontViewer);
             document.title = congName + " 집회계획표";
 
             // Apply Viewer Font
