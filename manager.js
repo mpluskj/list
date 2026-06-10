@@ -237,7 +237,8 @@ function showManagerContent() {
     if (weekendBtn) weekendBtn.style.display = canWeekend ? 'inline-flex' : 'none';
 
     // 전도인/배정/인쇄 관리는 일정을 관리할 수 있는 모든 관리자에게 노출
-    const canManage = canWeekday || canWeekend;
+    // 단, 주말집회 관리만 체크되어 있을 때는 전도인 관리, 배정 관리 메뉴는 노출되지 않도록 함
+    const canManage = canWeekday;
     const pubBtn = document.querySelector('.tab-btn[data-tab="publisher-mgmt"]');
     const assignBtn = document.querySelector('.tab-btn[data-tab="assignment-mgmt"]');
     const printBtn = document.getElementById('tab-print-schedules');
