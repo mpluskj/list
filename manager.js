@@ -393,6 +393,15 @@ async function loadAllData() {
         weekdayData = schData || [];
         deletedIds = [];
 
+        // 직접 입력 시 제외 대상 검증(checkPartnerExclusion)을 위해 publishers 데이터도 미리 로드해둡니다.
+        const { data: pubData, error: pubErr } = await supabaseClient
+            .from('publishers')
+            .select('*')
+            .order('name', { ascending: true });
+        if (!pubErr && pubData) {
+            publishers = pubData;
+        }
+
         renderWeekdayTable();
         updateWeekFilterDropdown();
     } catch (error) {
@@ -497,6 +506,7 @@ window.updateWeekdayData = (idx, field, value) => {
     weekdayData[idx][field] = value;
     if ((field === 'assignee_1' || field === 'assignee_2') && value) {
         checkPublisherRemarks(value);
+        checkPartnerExclusion(idx);
     }
 };
 
@@ -506,6 +516,80 @@ function checkPublisherRemarks(name) {
     if (pub && pub.remarks && pub.remarks.trim() !== '') {
         alert(`[전도인 비고 안내 - ${pub.name}]\n${pub.remarks}`);
     }
+}
+
+function checkPartnerExclusion(idx) {
+    const row = weekdayData[idx];
+    if (!row) return;
+    
+    console.log('[디버그] checkPartnerExclusion 실행 - 카테고리:', row.category, '행:', row);
+    
+    // 야외 봉사(ministry) 파트에서만 적용됨
+    if (row.category !== 'ministry') {
+        console.log('[디버그] 야외 봉사(ministry) 파트가 아니므로 검사를 스킵합니다.');
+        return;
+    }
+    
+    const name1 = (row.assignee_1 || '').trim().replace(/\s+/g, '');
+    const name2 = (row.assignee_2 || '').trim().replace(/\s+/g, '');
+    
+    console.log('[디버그] 배정된 전도인 이름:', name1, ' / ', name2);
+    
+    if (name1 && name2) {
+        const pub1 = publishers.find(p => (p.name || '').trim().replace(/\s+/g, '') === name1);
+        const pub2 = publishers.find(p => (p.name || '').trim().replace(/\s+/g, '') === name2);
+        
+        console.log('[디버그] 찾은 전도인 명단 매칭:', pub1, pub2);
+        
+        if (pub1 && pub2) {
+            const excludes1 = (pub1.excluded_names || '').split(',').map(s => s.trim().replace(/\s+/g, '')).filter(Boolean);
+            const excludes2 = (pub2.excluded_names || '').split(',').map(s => s.trim().replace(/\s+/g, '')).filter(Boolean);
+            
+            const normName1 = pub1.name.trim().replace(/\s+/g, '');
+            const normName2 = pub2.name.trim().replace(/\s+/g, '');
+            
+            console.log('[디버그] 제외 리스트:', normName1, '=>', excludes1, '|', normName2, '=>', excludes2);
+            
+            if (excludes1.includes(normName2) || excludes2.includes(normName1)) {
+                alert(`[배정 경고]\n'${pub1.name}' 전도인과 '${pub2.name}' 전도인은 함께 배정할 수 없는 제외 대상입니다.`);
+            } else {
+                console.log('[디버그] 제외 대상 관계가 아닙니다. 정상 배정 가능.');
+            }
+        } else {
+            console.log('[디버그] 전도인 명단에서 배정1 또는 배정2 이름을 찾지 못해 검사를 생략합니다. (임의 이름 입력 등)');
+        }
+    }
+}
+
+function hasPartnerExclusionViolation() {
+    console.log('[디버그] 저장 전 전체 제외 대상 검사 시작. 데이터 수:', weekdayData.length);
+    for (let i = 0; i < weekdayData.length; i++) {
+        const row = weekdayData[i];
+        if (row.category !== 'ministry') continue;
+        
+        const name1 = (row.assignee_1 || '').trim().replace(/\s+/g, '');
+        const name2 = (row.assignee_2 || '').trim().replace(/\s+/g, '');
+        
+        if (name1 && name2) {
+            const pub1 = publishers.find(p => (p.name || '').trim().replace(/\s+/g, '') === name1);
+            const pub2 = publishers.find(p => (p.name || '').trim().replace(/\s+/g, '') === name2);
+            
+            if (pub1 && pub2) {
+                const excludes1 = (pub1.excluded_names || '').split(',').map(s => s.trim().replace(/\s+/g, '')).filter(Boolean);
+                const excludes2 = (pub2.excluded_names || '').split(',').map(s => s.trim().replace(/\s+/g, '')).filter(Boolean);
+                
+                const normName1 = pub1.name.trim().replace(/\s+/g, '');
+                const normName2 = pub2.name.trim().replace(/\s+/g, '');
+                
+                if (excludes1.includes(normName2) || excludes2.includes(normName1)) {
+                    alert(`[저장 실패]\n${row.week_date} 주간의 '${row.part_num} ${row.content}' 항목에서\n'${pub1.name}' 전도인과 '${pub2.name}' 전도인은 함께 배정할 수 없는 제외 대상입니다. 수정 후 다시 저장해주세요.`);
+                    return true;
+                }
+            }
+        }
+    }
+    console.log('[디버그] 저장 전 검증 완료. 위반 사항 없음.');
+    return false;
 }
 
 window.deleteRow = (idx) => {
@@ -756,6 +840,9 @@ async function parseWolHtml(html) {
 }
 
 async function saveData() {
+    if (hasPartnerExclusionViolation()) {
+        return;
+    }
 
     try {
         if (deletedIds.length > 0) {
@@ -2867,6 +2954,8 @@ function selectHelperPublisher(name) {
         }
     }
 
+    const targetIdx = activeHelperRowIdx;
+
     // 로컬 데이터 객체 업데이트
     weekdayData[activeHelperRowIdx][activeHelperField] = name;
 
@@ -2878,6 +2967,9 @@ function selectHelperPublisher(name) {
 
     // Remarks check
     checkPublisherRemarks(name);
+
+    // Partner exclusion check
+    checkPartnerExclusion(targetIdx);
 }
 
 function closeAssignmentHelperModal() {
