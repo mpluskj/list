@@ -1,4 +1,4 @@
-let adminInfo = JSON.parse(sessionStorage.getItem('adminInfo')) || null;
+let adminInfo = JSON.parse(localStorage.getItem('adminInfo')) || JSON.parse(sessionStorage.getItem('adminInfo')) || null;
 let weekdayData = []; // Array of objects mapping to 'schedules' table (8 fields)
 let deletedIds = [];
 let currentWeekFilter = 'all';
@@ -20,9 +20,17 @@ let activeHelperRowIdx = null;
 let activeHelperField = null;
 let activeHelperFilterOnly = true;
 
+// 회중 통합 설정 및 기초 데이터 글로벌 상태
+let congregationType = localStorage.getItem('CONGREGATION_TYPE') || 'korean';
+let showInterpTag = localStorage.getItem('SHOW_INTERP_TAG') !== 'false';
+let showWeekdayInterpCheck = localStorage.getItem('SHOW_WEEKDAY_INTERP_CHECK') !== 'false';
+let showSlCheck = localStorage.getItem('SHOW_SL_CHECK') !== 'false';
+let showInterpColumn = localStorage.getItem('SHOW_INTERP_COLUMN') !== 'false';
+let masterItems = JSON.parse(localStorage.getItem('MASTER_ITEMS')) || DEFAULT_MASTER_ITEMS;
+
 // Focus Management for Weekend Table
 let nextFocusTarget = { idx: null, field: null };
-const weekendFieldSequence = ['speaker', 'congregation', 'speaker_contact', 'inviter', 'chairman', 'reader', 'bible_reader', 'prayer'];
+const weekendFieldSequence = ['speaker', 'congregation', 'speaker_contact', 'inviter', 'chairman', 'interpreter_name', 'reader', 'bible_reader', 'prayer'];
 
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -38,8 +46,30 @@ document.addEventListener('DOMContentLoaded', async () => {
 function setupEventListeners() {
     document.getElementById('btn-login').addEventListener('click', handleLogin);
 
+    const adminPwInput = document.getElementById('admin-pw');
+    const adminNameInput = document.getElementById('admin-name');
+    if (adminPwInput) {
+        adminPwInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handleLogin();
+            }
+        });
+    }
+    if (adminNameInput) {
+        adminNameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (adminPwInput) adminPwInput.focus();
+            }
+        });
+    }
+
     document.getElementById('btn-logout').addEventListener('click', () => {
+        localStorage.removeItem('adminInfo');
         sessionStorage.removeItem('adminInfo');
+        sessionStorage.removeItem('SESSION_SUPABASE_URL');
+        sessionStorage.removeItem('SESSION_SUPABASE_KEY');
         location.reload();
     });
 
@@ -57,6 +87,8 @@ function setupEventListeners() {
                 loadNavLinks();
                 loadAdminAccounts();
                 loadWebConnections();
+                loadAppSettings();
+                renderMasterItemsUI();
             } else if (tabId === 'weekend-data') {
                 loadWeekendData();
             } else if (tabId === 'publisher-mgmt') {
@@ -210,6 +242,46 @@ function setupEventListeners() {
 
     const btnSeedDb = document.getElementById('btn-seed-db');
     if (btnSeedDb) btnSeedDb.addEventListener('click', seedInitialData);
+
+    // 회중 유형 및 기초 데이터 이벤트 리스너
+    const congTypeSelect = document.getElementById('congregation-type-select');
+    if (congTypeSelect) congTypeSelect.addEventListener('change', handleCongregationTypeChange);
+
+    const optTag = document.getElementById('opt-show-interp-tag');
+    if (optTag) optTag.addEventListener('change', (e) => {
+        showInterpTag = e.target.checked;
+        applyCongregationModeUI();
+    });
+
+    const optWeekdayCheck = document.getElementById('opt-show-weekday-interp-check');
+    if (optWeekdayCheck) optWeekdayCheck.addEventListener('change', (e) => {
+        showWeekdayInterpCheck = e.target.checked;
+        applyCongregationModeUI();
+    });
+
+    const optSlCheck = document.getElementById('opt-show-sl-check');
+    if (optSlCheck) optSlCheck.addEventListener('change', (e) => {
+        showSlCheck = e.target.checked;
+        applyCongregationModeUI();
+    });
+
+    const optCol = document.getElementById('opt-show-interp-column');
+    if (optCol) optCol.addEventListener('change', (e) => {
+        showInterpColumn = e.target.checked;
+        applyCongregationModeUI();
+    });
+
+    const btnAddMasterCat = document.getElementById('btn-add-master-cat');
+    if (btnAddMasterCat) btnAddMasterCat.addEventListener('click', addMasterCategory);
+
+    const btnAddMasterTask = document.getElementById('btn-add-master-task');
+    if (btnAddMasterTask) btnAddMasterTask.addEventListener('click', addMasterTaskType);
+
+    const btnAddMasterGrade = document.getElementById('btn-add-master-grade');
+    if (btnAddMasterGrade) btnAddMasterGrade.addEventListener('click', addMasterInterpGrade);
+
+    const btnSaveMasterItems = document.getElementById('btn-save-master-items');
+    if (btnSaveMasterItems) btnSaveMasterItems.addEventListener('click', saveMasterItemsSettings);
 }
 
 function showLoginSection() {
@@ -327,18 +399,22 @@ async function handleLogin() {
     try {
         // 1. 먼저 defaultSupabaseClient를 사용하여 database_connections에 등록된 설정이 있는지 확인합니다.
         let isCustomDb = false;
+        let dbConfig = null;
         if (defaultSupabaseClient) {
-            const { data: dbConfig, error: dbErr } = await defaultSupabaseClient
+            const { data: matchedDb, error: dbErr } = await defaultSupabaseClient
                 .from('database_connections')
                 .select('*')
                 .eq('username', name)
                 .eq('password', pw)
                 .maybeSingle();
 
-            if (dbConfig && dbConfig.supabase_url && dbConfig.supabase_key) {
+            if (matchedDb && matchedDb.supabase_url && matchedDb.supabase_key) {
+                dbConfig = matchedDb;
                 console.log('[Login] 커스텀 DB 정보 발견:', dbConfig.supabase_url);
                 // Active 클라이언트를 커스텀 DB로 전환
-                supabaseClient = window.supabase.createClient(dbConfig.supabase_url, dbConfig.supabase_key);
+                supabaseClient = window.supabase.createClient(dbConfig.supabase_url, dbConfig.supabase_key, {
+                    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+                });
                 APP_CONFIG.SUPABASE_URL = dbConfig.supabase_url;
                 APP_CONFIG.SUPABASE_KEY = dbConfig.supabase_key;
 
@@ -360,18 +436,38 @@ async function handleLogin() {
         if (data) {
             adminInfo = {
                 name: data.username,
-                role: data.role,
+                role: data.role || 'superadmin',
                 can_manage_weekday: data.can_manage_weekday !== false, // 기본값 true
                 can_manage_weekend: data.can_manage_weekend !== false  // 기본값 true
             };
+            localStorage.setItem('adminInfo', JSON.stringify(adminInfo));
+            sessionStorage.setItem('adminInfo', JSON.stringify(adminInfo));
+            showManagerContent();
+        } else if (isCustomDb && dbConfig) {
+            // DB 연결은 확인되었으나 admin_users에 계정이 없는 경우, 해당 관리자 계정을 커스텀 DB의 admin_users에 자동 동기화/생성 후 로그인
+            console.log('[Login] 커스텀 DB에 관리자 계정 자동 생성 및 동기화 진행');
+            try {
+                await supabaseClient.from('admin_users').upsert([{
+                    username: name,
+                    password: pw,
+                    role: 'superadmin',
+                    can_manage_weekday: true,
+                    can_manage_weekend: true
+                }]);
+            } catch (autoErr) {
+                console.warn('[Login] admin_users 자동 생성 실패:', autoErr);
+            }
+            adminInfo = {
+                name: name,
+                role: 'superadmin',
+                can_manage_weekday: true,
+                can_manage_weekend: true
+            };
+            localStorage.setItem('adminInfo', JSON.stringify(adminInfo));
             sessionStorage.setItem('adminInfo', JSON.stringify(adminInfo));
             showManagerContent();
         } else {
-            if (isCustomDb) {
-                alert('데이터베이스 연결은 확인되었으나, 해당 데이터베이스의 admin_users 테이블에 일치하는 관리자 계정이 없습니다.\n초기 데이터를 생성(Seed)했는지 확인해 주세요.');
-            } else {
-                alert('이름 또는 비밀번호가 일치하지 않습니다.');
-            }
+            alert('이름 또는 비밀번호가 일치하지 않습니다.');
         }
     } catch (error) {
         console.error('Login error:', error);
@@ -380,9 +476,11 @@ async function handleLogin() {
 }
 
 async function loadAllData() {
-
     try {
-        // Fetch schedules
+        // 1. 앱 설정(회중 유형, 수어 맞춤 설정, 컬럼 설정 등)을 DB에서 먼저 완전히 로드
+        await loadAppSettings();
+
+        // 2. Fetch schedules
         const { data: schData, error: schErr } = await supabaseClient
             .from('schedules')
             .select('*')
@@ -443,36 +541,638 @@ function ensureFontLoaded(fontName) {
     document.head.appendChild(link);
 }
 
-function applyFontToBody(fontName) {
-    if (!fontName || !FONT_FAMILY_MAP[fontName]) return;
-    document.body.style.fontFamily = FONT_FAMILY_MAP[fontName];
+async function loadAppSettings() {
+    try {
+        const { data } = await supabaseClient.from('app_settings').select('*');
+        if (data) {
+            const congName = data.find(s => s.key === 'congregation_name')?.value;
+            if (congName) {
+                const el = document.getElementById('congregation-name-input');
+                if (el) el.value = congName;
+                localStorage.setItem('congregationName', congName);
+            }
+            const typeVal = data.find(s => s.key === 'congregation_type')?.value;
+            if (typeVal) {
+                congregationType = typeVal;
+                localStorage.setItem('CONGREGATION_TYPE', typeVal);
+            }
+            const tagVal = data.find(s => s.key === 'show_interp_tag')?.value;
+            if (tagVal !== undefined) {
+                showInterpTag = tagVal === 'true';
+                localStorage.setItem('SHOW_INTERP_TAG', showInterpTag ? 'true' : 'false');
+            }
+
+            const weekdayCheckVal = data.find(s => s.key === 'show_weekday_interp_check')?.value;
+            if (weekdayCheckVal !== undefined) {
+                showWeekdayInterpCheck = weekdayCheckVal === 'true';
+                localStorage.setItem('SHOW_WEEKDAY_INTERP_CHECK', showWeekdayInterpCheck ? 'true' : 'false');
+            }
+
+            const checkVal = data.find(s => s.key === 'show_sl_check')?.value;
+            if (checkVal !== undefined) {
+                showSlCheck = checkVal === 'true';
+                localStorage.setItem('SHOW_SL_CHECK', showSlCheck ? 'true' : 'false');
+            }
+
+            const colVal = data.find(s => s.key === 'show_interp_column')?.value;
+            if (colVal !== undefined) {
+                showInterpColumn = colVal === 'true';
+                localStorage.setItem('SHOW_INTERP_COLUMN', showInterpColumn ? 'true' : 'false');
+            }
+
+            const masterVal = data.find(s => s.key === 'custom_master_items')?.value;
+            if (masterVal) {
+                try {
+                    masterItems = JSON.parse(masterVal);
+                    localStorage.setItem('MASTER_ITEMS', JSON.stringify(masterItems));
+                } catch(e){}
+            }
+
+            const fontViewer = data.find(s => s.key === 'font_viewer')?.value;
+            if (fontViewer) {
+                const el = document.getElementById('font-viewer-select');
+                if (el) el.value = fontViewer;
+                localStorage.setItem('fontViewer', fontViewer);
+            }
+
+            const fontManager = data.find(s => s.key === 'font_manager')?.value;
+            if (fontManager) {
+                const el = document.getElementById('font-manager-select');
+                if (el) el.value = fontManager;
+                localStorage.setItem('fontManager', fontManager);
+                ensureFontLoaded(fontManager);
+                applyFontToBody(fontManager);
+            }
+
+            const fontPrint = data.find(s => s.key === 'font_print')?.value;
+            if (fontPrint) {
+                const el = document.getElementById('font-print-select');
+                if (el) el.value = fontPrint;
+                localStorage.setItem('fontPrint', fontPrint);
+            }
+
+            // Sync column configs from DB if saved on server
+            const dbWkday = data.find(s => s.key === 'weekday_cols_config')?.value;
+            if (dbWkday) {
+                try {
+                    weekdayCols = JSON.parse(dbWkday);
+                    localStorage.setItem('weekdayCols', dbWkday);
+                } catch (e) {}
+            }
+
+            const dbWkend = data.find(s => s.key === 'weekend_cols_config')?.value;
+            if (dbWkend) {
+                try {
+                    weekendCols = JSON.parse(dbWkend);
+                    localStorage.setItem('weekendCols', dbWkend);
+                } catch (e) {}
+            }
+        }
+    } catch(e) {
+        console.error('loadAppSettings error:', e);
+    }
+
+    // Ensure core SL columns are always present in column arrays
+    if (!weekdayCols.some(c => c.key === 'interpreter')) {
+        const actionIdx = weekdayCols.findIndex(c => c.key === 'action');
+        const interpCol = { key: 'interpreter', label: '통역', width: '40px', isCore: true, className: 'sl-col-weekday-interp', align: 'center' };
+        if (actionIdx !== -1) {
+            weekdayCols.splice(actionIdx, 0, interpCol);
+        } else {
+            weekdayCols.push(interpCol);
+        }
+    }
+    weekdayCols.forEach(c => {
+        if (c.key === 'interpreter') c.className = 'sl-col-weekday-interp';
+    });
+
+    if (!weekendCols.some(c => c.key === 'is_confirmed')) {
+        const topicIdx = weekendCols.findIndex(c => c.key === 'topic');
+        const slCol = { key: 'is_confirmed', label: 'SL', width: '40px', isCore: true, className: 'sl-col-check', align: 'center' };
+        if (topicIdx !== -1) {
+            weekendCols.splice(topicIdx + 1, 0, slCol);
+        } else {
+            weekendCols.push(slCol);
+        }
+    }
+    if (!weekendCols.some(c => c.key === 'interpreter_name')) {
+        const chairmanIdx = weekendCols.findIndex(c => c.key === 'chairman');
+        const interpCol = { key: 'interpreter_name', label: '수어통역', width: '72px', isCore: true, className: 'sl-col-interp', align: 'center' };
+        if (chairmanIdx !== -1) {
+            weekendCols.splice(chairmanIdx + 1, 0, interpCol);
+        } else {
+            weekendCols.push(interpCol);
+        }
+    }
+    weekendCols.forEach(c => {
+        if (c.key === 'is_confirmed') c.className = 'sl-col-check';
+        if (c.key === 'interpreter_name') c.className = 'sl-col-interp';
+        if (c.key === 'bible_reader') c.className = 'kr-col-reader';
+    });
+
+    const typeSelect = document.getElementById('congregation-type-select');
+    if (typeSelect) typeSelect.value = congregationType;
+
+    const optTag = document.getElementById('opt-show-interp-tag');
+    if (optTag) optTag.checked = showInterpTag;
+
+    const optWeekdayCheck = document.getElementById('opt-show-weekday-interp-check');
+    if (optWeekdayCheck) optWeekdayCheck.checked = showWeekdayInterpCheck;
+
+    const optCheck = document.getElementById('opt-show-sl-check');
+    if (optCheck) optCheck.checked = showSlCheck;
+
+    const optCol = document.getElementById('opt-show-interp-column');
+    if (optCol) optCol.checked = showInterpColumn;
+
+    applyCongregationModeUI();
 }
 
-function getCategoryOptions(selectedVal) {
-    const categories = [
-        { val: 'top', label: '상단(성경읽기/첫노래)' },
-        { val: 'treasures', label: '성경에 담긴 보물' },
-        { val: 'ministry', label: '야외 봉사에 힘쓰십시오' },
-        { val: 'living', label: '그리스도인 생활' },
-        { val: 'sunday', label: '광고' }
-    ];
-    return categories.map(c => `<option value="${c.val}" ${c.val === selectedVal ? 'selected' : ''}>${c.label}</option>`).join('');
+function handleCongregationTypeChange(e) {
+    const val = e.target.value;
+    congregationType = val;
+    localStorage.setItem('CONGREGATION_TYPE', val);
+
+    if (val === 'sign_language') {
+        showInterpTag = true;
+        showWeekdayInterpCheck = true;
+        showSlCheck = true;
+        showInterpColumn = true;
+    } else {
+        showInterpTag = false;
+        showWeekdayInterpCheck = false;
+        showSlCheck = false;
+        showInterpColumn = false;
+    }
+
+    const optTag = document.getElementById('opt-show-interp-tag');
+    if (optTag) optTag.checked = showInterpTag;
+    const optWeekdayCheck = document.getElementById('opt-show-weekday-interp-check');
+    if (optWeekdayCheck) optWeekdayCheck.checked = showWeekdayInterpCheck;
+    const optCheck = document.getElementById('opt-show-sl-check');
+    if (optCheck) optCheck.checked = showSlCheck;
+    const optCol = document.getElementById('opt-show-interp-column');
+    if (optCol) optCol.checked = showInterpColumn;
+
+    applyCongregationModeUI();
+    renderWeekdayTable();
+    renderWeekendTable();
+    renderPublishersTable();
+}
+
+function applyCongregationModeUI() {
+    const isSL = congregationType === 'sign_language';
+
+    // 1. 수어회중 옵션 박스 및 등급 관리 표시
+    const slOptionsBox = document.getElementById('sign-language-options-box');
+    if (slOptionsBox) {
+        slOptionsBox.style.display = isSL ? 'block' : 'none';
+    }
+
+    const interpGradesBox = document.getElementById('master-interp-grades-box');
+    if (interpGradesBox) {
+        interpGradesBox.style.display = isSL ? 'block' : 'none';
+    }
+
+    // 2. 전도인 관리 (농인 여부, 통역 등급)
+    const deafGradeElements = document.querySelectorAll('.sl-col-deaf, .sl-col-interp-grade');
+    deafGradeElements.forEach(el => {
+        el.style.display = isSL ? '' : 'none';
+    });
+
+    // 3. 평일집회 통역 체크박스 컬럼
+    const weekdayInterpElements = document.querySelectorAll('.sl-col-weekday-interp');
+    weekdayInterpElements.forEach(el => {
+        el.style.display = (isSL && showWeekdayInterpCheck) ? '' : 'none';
+    });
+
+    // 4. 주말집회 SL 체크박스 컬럼
+    const slCheckElements = document.querySelectorAll('.sl-col-check');
+    slCheckElements.forEach(el => {
+        el.style.display = (isSL && showSlCheck) ? '' : 'none';
+    });
+
+    // 5. 주말집회 수어통역자 컬럼
+    const interpColElements = document.querySelectorAll('.sl-col-interp');
+    interpColElements.forEach(el => {
+        el.style.display = (isSL && showInterpColumn) ? '' : 'none';
+    });
+
+    // 6. 주말집회 낭독자 컬럼 (한국어 회중 전용)
+    const readerColElements = document.querySelectorAll('.kr-col-reader');
+    readerColElements.forEach(el => {
+        el.style.display = isSL ? 'none' : '';
+    });
+}
+
+function renderMasterItemsUI() {
+    // Categories
+    const catContainer = document.getElementById('master-categories-list');
+    if (catContainer) {
+        catContainer.innerHTML = (masterItems.weekday_categories || []).map((cat, idx) => `
+            <span class="badge-num" style="background:var(--gray-100); color:var(--gray-800); font-size:0.75rem; padding:4px 8px; border-radius:6px; border:1px solid var(--border); display:inline-flex; align-items:center; gap:6px;">
+                <strong>${escapeHtml(cat.label)}</strong> <small style="color:var(--gray-500);">(${escapeHtml(cat.key)})</small>
+                <i class="fas fa-times" onclick="deleteMasterCategory(${idx})" style="cursor:pointer; color:var(--danger); margin-left:4px;"></i>
+            </span>
+        `).join('');
+    }
+
+    // Task Types
+    const taskContainer = document.getElementById('master-task-types-list');
+    if (taskContainer) {
+        taskContainer.innerHTML = (masterItems.task_types || []).map((task, idx) => `
+            <span class="badge-num" style="background:rgba(147, 51, 234, 0.1); color:var(--purple); font-size:0.75rem; padding:4px 8px; border-radius:6px; border:1px solid rgba(147, 51, 234, 0.2); display:inline-flex; align-items:center; gap:6px;">
+                <strong>${escapeHtml(task.label)}</strong> <small style="color:var(--gray-500);">(${escapeHtml(task.key)})</small>
+                <i class="fas fa-times" onclick="deleteMasterTaskType(${idx})" style="cursor:pointer; color:var(--danger); margin-left:4px;"></i>
+            </span>
+        `).join('');
+    }
+
+    // Interpretation Grades
+    const gradeContainer = document.getElementById('master-interp-grades-list');
+    if (gradeContainer) {
+        gradeContainer.innerHTML = (masterItems.interpretation_grades || []).map((g, idx) => `
+            <span class="badge-num" style="background:rgba(16, 185, 129, 0.1); color:var(--success); font-size:0.75rem; padding:4px 8px; border-radius:6px; border:1px solid rgba(16, 185, 129, 0.2); display:inline-flex; align-items:center; gap:6px;">
+                <strong>${escapeHtml(g)} 등급</strong>
+                <i class="fas fa-times" onclick="deleteMasterInterpGrade(${idx})" style="cursor:pointer; color:var(--danger); margin-left:4px;"></i>
+            </span>
+        `).join('');
+    }
+}
+
+function addMasterCategory() {
+    const key = document.getElementById('input-new-cat-key').value.trim();
+    const label = document.getElementById('input-new-cat-label').value.trim();
+    if (!key || !label) return alert('코드와 표시 이름을 모두 입력하세요.');
+    if (!masterItems.weekday_categories) masterItems.weekday_categories = [];
+    masterItems.weekday_categories.push({ key, label });
+    document.getElementById('input-new-cat-key').value = '';
+    document.getElementById('input-new-cat-label').value = '';
+    renderMasterItemsUI();
+}
+
+function deleteMasterCategory(idx) {
+    if (!confirm('이 카테고리를 삭제하시겠습니까?')) return;
+    masterItems.weekday_categories.splice(idx, 1);
+    renderMasterItemsUI();
+}
+
+function addMasterTaskType() {
+    const key = document.getElementById('input-new-task-key').value.trim();
+    const label = document.getElementById('input-new-task-label').value.trim();
+    if (!key || !label) return alert('코드와 표시 이름을 모두 입력하세요.');
+    if (!masterItems.task_types) masterItems.task_types = [];
+    masterItems.task_types.push({ key, label });
+    document.getElementById('input-new-task-key').value = '';
+    document.getElementById('input-new-task-label').value = '';
+    renderMasterItemsUI();
+}
+
+function deleteMasterTaskType(idx) {
+    if (!confirm('이 직무를 삭제하시겠습니까?')) return;
+    masterItems.task_types.splice(idx, 1);
+    renderMasterItemsUI();
+}
+
+function addMasterInterpGrade() {
+    const grade = document.getElementById('input-new-interp-grade').value.trim().toUpperCase();
+    if (!grade) return alert('등급명을 입력하세요.');
+    if (!masterItems.interpretation_grades) masterItems.interpretation_grades = [];
+    if (masterItems.interpretation_grades.includes(grade)) return alert('이미 존재하는 등급입니다.');
+    masterItems.interpretation_grades.push(grade);
+    document.getElementById('input-new-interp-grade').value = '';
+    renderMasterItemsUI();
+}
+
+function deleteMasterInterpGrade(idx) {
+    if (!confirm('이 등급을 삭제하시겠습니까?')) return;
+    masterItems.interpretation_grades.splice(idx, 1);
+    renderMasterItemsUI();
+}
+
+async function saveMasterItemsSettings() {
+    showInterpTag = document.getElementById('opt-show-interp-tag')?.checked ?? true;
+    showWeekdayInterpCheck = document.getElementById('opt-show-weekday-interp-check')?.checked ?? true;
+    showSlCheck = document.getElementById('opt-show-sl-check')?.checked ?? true;
+    showInterpColumn = document.getElementById('opt-show-interp-column')?.checked ?? true;
+
+    // Read fonts & congregation name
+    const congName = document.getElementById('congregation-name-input')?.value || '';
+    const fontViewer = document.getElementById('font-viewer-select')?.value || 'Pretendard';
+    const fontManager = document.getElementById('font-manager-select')?.value || 'Pretendard';
+    const fontPrint = document.getElementById('font-print-select')?.value || 'Pretendard';
+
+    localStorage.setItem('CONGREGATION_TYPE', congregationType);
+    localStorage.setItem('SHOW_INTERP_TAG', showInterpTag ? 'true' : 'false');
+    localStorage.setItem('SHOW_WEEKDAY_INTERP_CHECK', showWeekdayInterpCheck ? 'true' : 'false');
+    localStorage.setItem('SHOW_SL_CHECK', showSlCheck ? 'true' : 'false');
+    localStorage.setItem('SHOW_INTERP_COLUMN', showInterpColumn ? 'true' : 'false');
+    localStorage.setItem('MASTER_ITEMS', JSON.stringify(masterItems));
+
+    localStorage.setItem('congregationName', congName);
+    localStorage.setItem('fontViewer', fontViewer);
+    localStorage.setItem('fontManager', fontManager);
+    localStorage.setItem('fontPrint', fontPrint);
+
+    // Instantly apply Manager Font to body
+    ensureFontLoaded(fontManager);
+    applyFontToBody(fontManager);
+
+    try {
+        const now = new Date().toISOString();
+        const settingsToUpsert = [
+            { key: 'congregation_name', value: congName, updated_at: now },
+            { key: 'font_viewer', value: fontViewer, updated_at: now },
+            { key: 'font_manager', value: fontManager, updated_at: now },
+            { key: 'font_print', value: fontPrint, updated_at: now },
+            { key: 'congregation_type', value: congregationType, updated_at: now },
+            { key: 'show_interp_tag', value: showInterpTag ? 'true' : 'false', updated_at: now },
+            { key: 'show_weekday_interp_check', value: showWeekdayInterpCheck ? 'true' : 'false', updated_at: now },
+            { key: 'show_sl_check', value: showSlCheck ? 'true' : 'false', updated_at: now },
+            { key: 'show_interp_column', value: showInterpColumn ? 'true' : 'false', updated_at: now },
+            { key: 'custom_master_items', value: JSON.stringify(masterItems), updated_at: now }
+        ];
+
+        const { error } = await supabaseClient.from('app_settings').upsert(settingsToUpsert, { onConflict: 'key' });
+        if (error) console.warn('[MasterItems] DB save warning:', error);
+
+        alert('기본 설정 및 기초 데이터가 저장되었습니다.');
+        broadcastChange('회중 설정');
+        applyCongregationModeUI();
+        renderWeekdayTable();
+        renderWeekendTable();
+        renderPublishersTable();
+    } catch(e) {
+        console.error(e);
+        alert('설정 저장 중 오류 발생: ' + e.message);
+    }
+}
+
+const CATEGORY_MAP = [
+    { val: 'top', short: '상단', full: '상단 (성경읽기/첫노래)' },
+    { val: 'treasures', short: '보물', full: '보물 (성경에 담긴 보물)' },
+    { val: 'ministry', short: '봉사', full: '봉사 (야외 봉사에 힘쓰십시오)' },
+    { val: 'living', short: '생활', full: '생활 (그리스도인 생활)' },
+    { val: 'sunday', short: '광고', full: '광고' }
+];
+
+function getCategoryOptions(selectedVal, expanded = false) {
+    return CATEGORY_MAP.map(c => {
+        const text = expanded ? c.full : c.short;
+        const isMatch = (c.val === selectedVal || c.short === selectedVal || c.full === selectedVal);
+        const selected = isMatch ? 'selected' : '';
+        return `<option value="${c.val}" ${selected} title="${c.full}">${text}</option>`;
+    }).join('');
+}
+
+window.expandCategorySelect = (selectEl) => {
+    const val = selectEl.value;
+    selectEl.innerHTML = getCategoryOptions(val, true);
+};
+
+window.collapseCategorySelect = (selectEl) => {
+    const val = selectEl.value;
+    selectEl.innerHTML = getCategoryOptions(val, false);
+};
+
+let activeContextMenuTarget = null; // { tableType, colIndex, colKey, isCore, label }
+
+const defaultWeekdayCols = [
+    { key: 'category', label: '분류', width: '60px', isCore: true, align: 'center' },
+    { key: 'week_date', label: '주차', width: '105px', isCore: true, align: 'center' },
+    { key: 'part_num', label: '부분', width: '65px', isCore: true, align: 'center' },
+    { key: 'content', label: '내용(주제)', width: 'auto', minWidth: '180px', isCore: true, align: 'center' },
+    { key: 'duration', label: '시간', width: '70px', isCore: true, align: 'center' },
+    { key: 'assignee_1', label: '배정1', width: '72px', isCore: true, align: 'center' },
+    { key: 'assignee_2', label: '배정2', width: '72px', isCore: true, align: 'center' },
+    { key: 'interpreter', label: '통역', width: '40px', isCore: true, className: 'sl-col-weekday-interp', align: 'center' },
+    { key: 'action', label: '관리', width: '100px', isCore: true, isAction: true, align: 'center' }
+];
+
+let weekdayCols = JSON.parse(localStorage.getItem('weekdayCols') || 'null') || [...defaultWeekdayCols];
+weekdayCols.forEach(c => {
+    c.align = 'center';
+    if (c.key === 'interpreter') {
+        c.className = 'sl-col-weekday-interp';
+    }
+    if (c.key === 'content') {
+        c.width = 'auto';
+        c.minWidth = '180px';
+    }
+    if (c.key === 'assignee_1' || c.key === 'assignee_2') {
+        c.width = '72px';
+    }
+    if (c.key === 'action') c.width = '100px';
+});
+
+const defaultWeekendCols = [
+    { key: 'select', label: '선택', width: '40px', isCore: true, isSelect: true, align: 'center' },
+    { key: 'meeting_date', label: '날짜', width: '90px', isCore: true, className: 'col-date', align: 'center' },
+    { key: 'outline_no', label: '골자', width: '60px', isCore: true, align: 'center' },
+    { key: 'topic', label: '주제', width: 'auto', minWidth: '160px', isCore: true, align: 'center' },
+    { key: 'is_confirmed', label: 'SL', width: '40px', isCore: true, className: 'sl-col-check', align: 'center' },
+    { key: 'speaker', label: '연사', width: '72px', isCore: true, align: 'center' },
+    { key: 'congregation', label: '회중', width: '85px', isCore: true, align: 'center' },
+    { key: 'speaker_contact', label: '연사연락처', width: '95px', isCore: true, align: 'center' },
+    { key: 'inviter', label: '초대자', width: '72px', isCore: true, align: 'center' },
+    { key: 'chairman', label: '사회', width: '72px', isCore: true, align: 'center' },
+    { key: 'interpreter_name', label: '수어통역', width: '72px', isCore: true, className: 'sl-col-interp', align: 'center' },
+    { key: 'reader', label: '파수대', width: '72px', isCore: true, align: 'center' },
+    { key: 'bible_reader', label: '낭독', width: '72px', isCore: true, className: 'kr-col-reader', align: 'center' },
+    { key: 'prayer', label: '기도', width: '72px', isCore: true, align: 'center' },
+    { key: 'action', label: '관리', width: '130px', isCore: true, isAction: true, align: 'center' }
+];
+
+let weekendCols = JSON.parse(localStorage.getItem('weekendCols') || 'null') || [...defaultWeekendCols];
+weekendCols.forEach(c => {
+    c.align = 'center';
+    if (c.key === 'topic') {
+        c.width = 'auto';
+        c.minWidth = '160px';
+    }
+    if (['speaker', 'chairman', 'interpreter_name', 'reader', 'bible_reader', 'prayer', 'inviter'].includes(c.key)) {
+        c.width = '72px';
+    }
+});
+
+function checkIsSuperAdmin() {
+    if (typeof adminInfo === 'undefined' || !adminInfo) return false;
+    const role = (adminInfo.role || '').toLowerCase();
+    return role === 'superadmin' || role === 'super_admin' || adminInfo.is_super === true;
+}
+
+window.openHeaderContextMenu = (e, tableType, colIndex) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // 일반 관리자는 마우스 우측 팝업 메뉴를 아예 작동시키지 않음 (메시지창 없음)
+    if (!checkIsSuperAdmin()) {
+        return;
+    }
+
+    const cols = tableType === 'weekday' ? weekdayCols : weekendCols;
+    const col = cols[colIndex];
+    if (!col) return;
+
+    activeContextMenuTarget = {
+        tableType,
+        colIndex,
+        colKey: col.key,
+        isCore: !!col.isCore,
+        label: col.label
+    };
+
+    const menu = document.getElementById('table-header-context-menu');
+    if (!menu) return;
+
+    menu.style.display = 'block';
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+};
+
+window.hideHeaderContextMenu = () => {
+    const menu = document.getElementById('table-header-context-menu');
+    if (menu) menu.style.display = 'none';
+};
+
+document.addEventListener('click', () => window.hideHeaderContextMenu());
+document.addEventListener('scroll', () => window.hideHeaderContextMenu(), true);
+
+window.executeColumnMenuAction = (actionType) => {
+    window.hideHeaderContextMenu();
+    if (!activeContextMenuTarget) return;
+
+    if (!checkIsSuperAdmin()) return;
+
+    const { tableType, colIndex, isCore, label } = activeContextMenuTarget;
+    const cols = tableType === 'weekday' ? weekdayCols : weekendCols;
+
+    if (actionType === 'insert_left' || actionType === 'insert_right') {
+        const newLabel = prompt('추가할 열 항목 이름을 입력하세요:', '새 열');
+        if (!newLabel || !newLabel.trim()) return;
+
+        const widthInput = prompt(`'${newLabel.trim()}' 열의 기본 너비를 입력하세요 (auto 또는 숫자px / 기본값: 85):`, '85');
+        let widthVal = '85px';
+        if (widthInput !== null && widthInput.trim()) {
+            if (widthInput.trim().toLowerCase() === 'auto') {
+                widthVal = 'auto';
+            } else {
+                const parsedWidth = parseInt(widthInput.replace(/[^0-9]/g, ''));
+                if (!isNaN(parsedWidth) && parsedWidth >= 30) {
+                    widthVal = parsedWidth + 'px';
+                }
+            }
+        }
+
+        const defaultMin = widthVal !== 'auto' ? parseInt(widthVal) : '150';
+        const minWidthInput = prompt(`'${newLabel.trim()}' 열의 최소 너비(min-width)를 입력하세요 (숫자px / 없으면 엔터):`, defaultMin);
+        let minWidthVal = null;
+        if (minWidthInput !== null && minWidthInput.trim()) {
+            const parsedMin = parseInt(minWidthInput.replace(/[^0-9]/g, ''));
+            if (!isNaN(parsedMin) && parsedMin >= 20) {
+                minWidthVal = parsedMin + 'px';
+            }
+        }
+
+        const newColKey = 'col_custom_' + Date.now();
+        const newCol = {
+            key: newColKey,
+            label: newLabel.trim(),
+            width: widthVal,
+            minWidth: minWidthVal,
+            isCore: false,
+            align: 'center'
+        };
+
+        const targetIdx = actionType === 'insert_left' ? colIndex : colIndex + 1;
+        cols.splice(targetIdx, 0, newCol);
+
+        saveColumnConfig(tableType);
+    } else if (actionType === 'resize_col') {
+        const curCol = cols[colIndex];
+        const curW = curCol.width || '85px';
+        const curMinW = curCol.minWidth || (curW !== 'auto' ? curW : '');
+
+        const newWidthInput = prompt(`[${label}] 열의 기본 너비를 입력하세요 (auto 또는 숫자px):`, curW);
+        if (newWidthInput === null) return;
+
+        let newW = curW;
+        if (newWidthInput.trim().toLowerCase() === 'auto') {
+            newW = 'auto';
+        } else if (newWidthInput.trim()) {
+            const parsedWidth = parseInt(newWidthInput.replace(/[^0-9]/g, ''));
+            if (!isNaN(parsedWidth) && parsedWidth >= 30) {
+                newW = parsedWidth + 'px';
+            }
+        }
+
+        const newMinInput = prompt(`[${label}] 열의 최소 너비(min-width)를 입력하세요 (숫자px / 없으면 엔터):`, curMinW ? parseInt(curMinW) : '');
+        let newMinW = null;
+        if (newMinInput !== null && newMinInput.trim()) {
+            const parsedMin = parseInt(newMinInput.replace(/[^0-9]/g, ''));
+            if (!isNaN(parsedMin) && parsedMin >= 20) {
+                newMinW = parsedMin + 'px';
+            }
+        }
+
+        curCol.width = newW;
+        curCol.minWidth = newMinW;
+
+        saveColumnConfig(tableType);
+    } else if (actionType === 'rename_col') {
+        const newName = prompt('[' + label + '] 열의 새 이름을 입력하세요:', label);
+        if (!newName || !newName.trim() || newName.trim() === label) return;
+
+        cols[colIndex].label = newName.trim();
+        saveColumnConfig(tableType);
+    } else if (actionType === 'delete_col') {
+        if (isCore) {
+            if (!confirm('🚨 경고: 최고관리자 권한으로 시스템 기본 열 [' + label + ']을(를) 삭제합니다. 계속하시겠습니까?')) {
+                return;
+            }
+        } else {
+            if (!confirm('[' + label + '] 열을 삭제하시겠습니까?')) return;
+        }
+
+        cols.splice(colIndex, 1);
+        saveColumnConfig(tableType);
+    }
+};
+
+async function saveColumnConfig(tableType) {
+    const cols = tableType === 'weekday' ? weekdayCols : weekendCols;
+    const storageKey = tableType === 'weekday' ? 'weekdayCols' : 'weekendCols';
+    const dbKey = tableType === 'weekday' ? 'weekday_cols_config' : 'weekend_cols_config';
+
+    localStorage.setItem(storageKey, JSON.stringify(cols));
+
+    if (tableType === 'weekday') renderWeekdayTable();
+    else renderWeekendTable();
+
+    if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+        try {
+            await supabaseClient.from('app_settings').upsert([
+                { key: dbKey, value: JSON.stringify(cols), updated_at: new Date().toISOString() }
+            ]);
+        } catch (e) {
+            console.error('[saveColumnConfig] Sync error:', e);
+        }
+    }
 }
 
 function renderWeekdayTable() {
     const thead = document.querySelector('#weekday-data-table thead tr');
-    thead.innerHTML = `
-        <th style="width:110px;">분류</th>
-        <th style="width:100px;">주차</th>
-        <th style="width:100px;">부분(예: 1.)</th>
-        <th>내용(주제)</th>
-        <th style="width:70px;">시간</th>
-        <th style="width:70px;">배정1</th>
-        <th style="width:70px;">배정2</th>
-        <th style="width:70px;">-</th>
-    `;
+    if (thead) {
+        thead.innerHTML = weekdayCols.map((col, idx) => {
+            const cls = col.className ? ` class="${col.className}"` : '';
+            const minW = col.minWidth ? `min-width:${col.minWidth};` : (col.width ? `min-width:${col.width};` : '');
+            const style = `style="width:${col.width || 'auto'}; ${minW} text-align:center; cursor:context-menu;"`;
+            return `<th${cls} ${style} oncontextmenu="openHeaderContextMenu(event, 'weekday', ${idx})" title="마우스 우측 버튼으로 열 추가/삭제/수정">${escapeHtml(col.label)}</th>`;
+        }).join('');
+    }
 
     const tbody = document.querySelector('#weekday-data-table tbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     const displayData = currentWeekFilter === 'all'
@@ -480,26 +1180,46 @@ function renderWeekdayTable() {
         : weekdayData.filter(d => d.week_date === currentWeekFilter);
 
     displayData.forEach((row) => {
-        // Find the actual index in global weekdayData
         const originalIdx = weekdayData.indexOf(row);
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td><select onchange="updateWeekdayData(${originalIdx}, 'category', this.value)">${getCategoryOptions(row.category)}</select></td>
-            <td><input type="text" value="${escapeHtml(row.week_date || '')}" onchange="updateWeekdayData(${originalIdx}, 'week_date', this.value)"></td>
-            <td><input type="text" value="${escapeHtml(row.part_num || '')}" onchange="updateWeekdayData(${originalIdx}, 'part_num', this.value)"></td>
-            <td><input type="text" value="${escapeHtml(row.content || '')}" onchange="updateWeekdayData(${originalIdx}, 'content', this.value)"></td>
-            <td><input type="text" value="${escapeHtml(row.duration || '')}" onchange="updateWeekdayData(${originalIdx}, 'duration', this.value)"></td>
-            <td><input type="text" value="${escapeHtml(row.assignee_1 || '')}" onchange="updateWeekdayData(${originalIdx}, 'assignee_1', this.value)" ondblclick="openAssignmentHelper(${originalIdx}, 'assignee_1')" placeholder="더블클릭시 추천" style="cursor: pointer;"></td>
-            <td><input type="text" value="${escapeHtml(row.assignee_2 || '')}" onchange="updateWeekdayData(${originalIdx}, 'assignee_2', this.value)" ondblclick="openAssignmentHelper(${originalIdx}, 'assignee_2')" placeholder="더블클릭시 추천" style="cursor: pointer;"></td>
-            <td>
-                <div class="action-btn-group">
-                    <button class="btn-mini" onclick="insertRow(${originalIdx})" style="background: #00b894;" title="추가"><i class="fas fa-plus"></i></button>
-                    <button class="btn-mini" onclick="deleteRow(${originalIdx})" style="background: #d63031;" title="삭제"><i class="fas fa-trash"></i></button>
-                </div>
-            </td>
-        `;
+
+        let rowCellsHtml = weekdayCols.map(col => {
+            if (col.key === 'category') {
+                const catFull = CATEGORY_MAP.find(c => c.val === row.category || c.short === row.category)?.full || '';
+                return `<td><select onchange="updateWeekdayData(${originalIdx}, 'category', this.value); collapseCategorySelect(this);" onmousedown="expandCategorySelect(this);" onblur="collapseCategorySelect(this);" title="${escapeHtml(catFull)}" style="border:none; background:transparent; font-size:0.8rem; width:100%; cursor:pointer; padding:0 2px;">${getCategoryOptions(row.category, false)}</select></td>`;
+            } else if (col.key === 'week_date') {
+                return `<td style="text-align:center;"><input type="text" value="${escapeHtml(row.week_date || '')}" title="${escapeHtml(row.week_date || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekdayData(${originalIdx}, 'week_date', this.value)" style="border:none; background:transparent; text-align:center; font-size:0.8rem;"></td>`;
+            } else if (col.key === 'part_num') {
+                return `<td style="text-align:center;"><input type="text" value="${escapeHtml(row.part_num || '')}" title="${escapeHtml(row.part_num || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekdayData(${originalIdx}, 'part_num', this.value)" style="border:none; background:transparent; text-align:center; font-size:0.8rem;"></td>`;
+            } else if (col.key === 'content') {
+                return `<td><input type="text" value="${escapeHtml(row.content || '')}" title="${escapeHtml(row.content || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekdayData(${originalIdx}, 'content', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'duration') {
+                return `<td style="text-align:center;"><input type="text" value="${escapeHtml(row.duration || '')}" title="${escapeHtml(row.duration || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekdayData(${originalIdx}, 'duration', this.value)" style="border:none; background:transparent; text-align:center;"></td>`;
+            } else if (col.key === 'assignee_1') {
+                return `<td><input type="text" value="${escapeHtml(row.assignee_1 || '')}" title="${escapeHtml(row.assignee_1 || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekdayData(${originalIdx}, 'assignee_1', this.value)" ondblclick="openAssignmentHelper(${originalIdx}, 'assignee_1')" placeholder="더블클릭시 추천" style="border:none; background:transparent; cursor:pointer;"></td>`;
+            } else if (col.key === 'assignee_2') {
+                return `<td><input type="text" value="${escapeHtml(row.assignee_2 || '')}" title="${escapeHtml(row.assignee_2 || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekdayData(${originalIdx}, 'assignee_2', this.value)" ondblclick="openAssignmentHelper(${originalIdx}, 'assignee_2')" placeholder="더블클릭시 추천" style="border:none; background:transparent; cursor:pointer;"></td>`;
+            } else if (col.key === 'interpreter') {
+                return `<td class="sl-col-weekday-interp" style="text-align:center;"><input type="checkbox" ${row.interpreter === 'Y' ? 'checked' : ''} onchange="updateWeekdayData(${originalIdx}, 'interpreter', this.checked ? 'Y' : 'N')"></td>`;
+            } else if (col.key === 'action') {
+                return `<td style="text-align:center;">
+                    <div class="action-btn-group">
+                        <button class="btn-mini" onclick="insertRow(${originalIdx})" style="background: #00b894;" title="추가"><i class="fas fa-plus"></i></button>
+                        <button class="btn-mini" onclick="clearRow(${originalIdx})" style="background: #e17055;" title="내용 초기화"><i class="fas fa-eraser"></i></button>
+                        <button class="btn-mini" onclick="deleteRow(${originalIdx})" style="background: #d63031;" title="행 삭제"><i class="fas fa-trash"></i></button>
+                    </div>
+                </td>`;
+            } else {
+                const val = row[col.key] || '';
+                return `<td><input type="text" value="${escapeHtml(val)}" title="${escapeHtml(val)}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekdayData(${originalIdx}, '${col.key}', this.value)" style="border:none; background:transparent;"></td>`;
+            }
+        }).join('');
+
+        tr.innerHTML = rowCellsHtml;
         tbody.appendChild(tr);
     });
+
+    applyCongregationModeUI();
 }
 
 window.updateWeekdayData = (idx, field, value) => {
@@ -964,8 +1684,12 @@ async function loadNavLinks() {
             .select('*')
             .order('sort_order', { ascending: true });
 
-        if (navErr) throw navErr;
-        navLinks = navData || [];
+        if (navErr) {
+            console.warn('[NavLinks] Failed or table missing:', navErr.message || navErr);
+            navLinks = [];
+        } else {
+            navLinks = navData || [];
+        }
         deletedNavIds = [];
         renderNavLinks();
 
@@ -975,10 +1699,10 @@ async function loadNavLinks() {
             .select('*');
 
         if (!settingsErr && settingsData) {
-            const congName = settingsData.find(s => s.key === 'congregation_name')?.value || '';
-            const fontViewer = settingsData.find(s => s.key === 'font_viewer')?.value || 'Pretendard';
-            const fontManager = settingsData.find(s => s.key === 'font_manager')?.value || 'Pretendard';
-            const fontPrint = settingsData.find(s => s.key === 'font_print')?.value || 'Pretendard';
+            const congName = settingsData.find(s => s.key === 'congregation_name')?.value || localStorage.getItem('congregationName') || '';
+            const fontViewer = settingsData.find(s => s.key === 'font_viewer')?.value || localStorage.getItem('fontViewer') || 'Pretendard';
+            const fontManager = settingsData.find(s => s.key === 'font_manager')?.value || localStorage.getItem('fontManager') || 'Pretendard';
+            const fontPrint = settingsData.find(s => s.key === 'font_print')?.value || localStorage.getItem('fontPrint') || 'Pretendard';
 
             document.getElementById('congregation-name-input').value = congName;
             document.getElementById('font-viewer-select').value = fontViewer;
@@ -989,10 +1713,29 @@ async function loadNavLinks() {
             localStorage.setItem('congregationName', congName);
             localStorage.setItem('fontViewer', fontViewer);
             localStorage.setItem('fontManager', fontManager);
+            localStorage.setItem('fontPrint', fontPrint);
 
             // Apply Manager Font to body
             ensureFontLoaded(fontManager);
             applyFontToBody(fontManager);
+
+            // Sync column configs from DB if saved on server
+            const dbWkday = settingsData.find(s => s.key === 'weekday_cols_config')?.value;
+            if (dbWkday) {
+                try {
+                    weekdayCols = JSON.parse(dbWkday);
+                    localStorage.setItem('weekdayCols', dbWkday);
+                    renderWeekdayTable();
+                } catch (e) {}
+            }
+            const dbWkend = settingsData.find(s => s.key === 'weekend_cols_config')?.value;
+            if (dbWkend) {
+                try {
+                    weekendCols = JSON.parse(dbWkend);
+                    localStorage.setItem('weekendCols', dbWkend);
+                    renderWeekendTable();
+                } catch (e) {}
+            }
         }
 
         // Load Supabase Connection details into settings UI
@@ -1094,14 +1837,17 @@ async function saveNavLinks() {
 
         const { error: settingsErr } = await supabaseClient
             .from('app_settings')
-            .upsert(settingsUpserts);
+            .upsert(settingsUpserts, { onConflict: 'key' });
 
-        if (settingsErr) throw settingsErr;
+        if (settingsErr) {
+            console.warn('[AppSettings] Save warning (saved to localStorage):', settingsErr);
+        }
 
         // localStorage 캐시도 즉시 업데이트 (다음 로딩 시 최신값 반영)
         localStorage.setItem('congregationName', congName);
         localStorage.setItem('fontViewer', fontViewer);
         localStorage.setItem('fontManager', fontManager);
+        localStorage.setItem('fontPrint', fontPrint);
 
         // Instantly apply Manager Font to body
         ensureFontLoaded(fontManager);
@@ -1138,6 +1884,7 @@ async function saveNavLinks() {
         }
 
         alert('메뉴 설정이 저장되었습니다.');
+        broadcastChange('메뉴 링크');
         await loadNavLinks();
     } catch (e) {
         console.error(e);
@@ -1417,7 +2164,18 @@ async function loadOutlines() {
 }
 
 function renderWeekendTable() {
+    const thead = document.querySelector('#weekend-data-table thead tr');
+    if (thead) {
+        thead.innerHTML = weekendCols.map((col, idx) => {
+            const cls = col.className ? ` class="${col.className}"` : '';
+            const minW = col.minWidth ? `min-width:${col.minWidth};` : (col.width ? `min-width:${col.width};` : '');
+            const style = `style="width:${col.width || 'auto'}; ${minW} text-align:center; cursor:context-menu;"`;
+            return `<th${cls} ${style} oncontextmenu="openHeaderContextMenu(event, 'weekend', ${idx})" title="마우스 우측 버튼으로 열 추가/삭제/수정">${escapeHtml(col.label)}</th>`;
+        }).join('');
+    }
+
     const tbody = document.querySelector('#weekend-data-table tbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     weekendData.forEach((row, idx) => {
@@ -1427,42 +2185,66 @@ function renderWeekendTable() {
         const d = new Date(row.meeting_date);
         const dateDisplay = isNaN(d) ? '' : `${String(d.getFullYear()).slice(-2)}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
 
-        // 중복 여부에 따른 배경색 적용
-        let bgClass = '';
         if (row._dupStatus === '6month') {
             tr.style.backgroundColor = '#FFA500';
         } else if (row._dupStatus === '12month') {
             tr.style.backgroundColor = '#FFCC99';
         }
 
-        tr.innerHTML = `
-            <td style="text-align:center;"><input type="checkbox" class="check-weekend" data-id="${row.id || ''}"></td>
-            <td class="col-date" style="text-align:center;">
-                <div class="weekend-date-form">
-                    <span class="weekend-date-display">${dateDisplay}</span>
-                    <input type="date" value="${row.meeting_date || ''}" onchange="updateWeekendData(${idx}, 'meeting_date', this.value)" onclick="if(this.showPicker) this.showPicker()" style="background:transparent; border:none;">
-                </div>
-            </td>
-            <td><input type="text" data-idx="${idx}" data-field="outline_no" value="${row.outline_no || ''}" onchange="handleOutlineChange(${idx}, this.value)" placeholder="번호" style="border:none; background:transparent; text-align:center;"></td>
-            <td><input type="text" data-idx="${idx}" data-field="topic" value="${row.topic || outlineTopic}" onchange="updateWeekendData(${idx}, 'topic', this.value)" placeholder="주제" style="border:none; background:transparent;"></td>
-            <td><input type="text" data-idx="${idx}" data-field="speaker" value="${row.speaker || ''}" onchange="updateWeekendData(${idx}, 'speaker', this.value)" style="border:none; background:transparent;"></td>
-            <td><input type="text" data-idx="${idx}" data-field="congregation" value="${row.congregation || ''}" onchange="updateWeekendData(${idx}, 'congregation', this.value)" style="border:none; background:transparent;"></td>
-            <td><input type="text" data-idx="${idx}" data-field="speaker_contact" value="${row.speaker_contact || ''}" onchange="updateWeekendData(${idx}, 'speaker_contact', this.value)" style="border:none; background:transparent;"></td>
-            <td><input type="text" data-idx="${idx}" data-field="inviter" value="${row.inviter || ''}" onchange="updateWeekendData(${idx}, 'inviter', this.value)" style="border:none; background:transparent;"></td>
-            <td><input type="text" data-idx="${idx}" data-field="chairman" value="${row.chairman || ''}" onchange="updateWeekendData(${idx}, 'chairman', this.value)" style="border:none; background:transparent;"></td>
-            <td><input type="text" data-idx="${idx}" data-field="reader" value="${row.reader || ''}" onchange="updateWeekendData(${idx}, 'reader', this.value)" style="border:none; background:transparent;"></td>
-            <td><input type="text" data-idx="${idx}" data-field="bible_reader" value="${row.bible_reader || ''}" onchange="updateWeekendData(${idx}, 'bible_reader', this.value)" style="border:none; background:transparent;"></td>
-            <td><input type="text" data-idx="${idx}" data-field="prayer" value="${row.prayer || ''}" onchange="updateWeekendData(${idx}, 'prayer', this.value)" style="border:none; background:transparent;"></td>
-            <td>
-                <div class="action-btn-group">
-                    <button onclick="openMoveModal(${idx})" class="btn-mini" style="background:#0984e3;" title="데이터 이동"><i class="fas fa-arrow-right"></i></button>
-                    <button onclick="addWeekendRow(${idx})" class="btn-mini" style="background:#00b894;" title="추가"><i class="fas fa-plus"></i></button>
-                    <button class="btn-mini" onclick="clearWeekendRow(${idx})" style="background:#d63031;" title="내용 초기화"><i class="fas fa-eraser"></i></button>
-                </div>
-            </td>
-        `;
+        let rowCellsHtml = weekendCols.map(col => {
+            if (col.key === 'select') {
+                return `<td style="text-align:center;"><input type="checkbox" class="check-weekend" data-id="${row.id || ''}"></td>`;
+            } else if (col.key === 'meeting_date') {
+                return `<td class="col-date" style="text-align:center;">
+                    <div class="weekend-date-form">
+                        <span class="weekend-date-display" style="font-size:0.8rem;">${dateDisplay}</span>
+                        <input type="date" value="${row.meeting_date || ''}" title="${row.meeting_date || ''}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'meeting_date', this.value)" onclick="if(this.showPicker) this.showPicker()" style="background:transparent; border:none; font-size:0.8rem;">
+                    </div>
+                </td>`;
+            } else if (col.key === 'outline_no') {
+                return `<td><input type="text" data-idx="${idx}" data-field="outline_no" value="${row.outline_no || ''}" title="${escapeHtml(row.outline_no || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="handleOutlineChange(${idx}, this.value)" placeholder="번호" style="border:none; background:transparent; text-align:center;"></td>`;
+            } else if (col.key === 'topic') {
+                return `<td><input type="text" data-idx="${idx}" data-field="topic" value="${row.topic || outlineTopic}" title="${escapeHtml(row.topic || outlineTopic)}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'topic', this.value)" placeholder="주제" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'is_confirmed') {
+                return `<td class="sl-col-check" style="text-align:center;"><input type="checkbox" ${row.is_confirmed ? 'checked' : ''} onchange="updateWeekendData(${idx}, 'is_confirmed', this.checked)"></td>`;
+            } else if (col.key === 'speaker') {
+                return `<td><input type="text" data-idx="${idx}" data-field="speaker" value="${row.speaker || ''}" title="${escapeHtml(row.speaker || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'speaker', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'congregation') {
+                return `<td><input type="text" data-idx="${idx}" data-field="congregation" value="${row.congregation || ''}" title="${escapeHtml(row.congregation || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'congregation', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'speaker_contact') {
+                return `<td><input type="text" data-idx="${idx}" data-field="speaker_contact" value="${row.speaker_contact || ''}" title="${escapeHtml(row.speaker_contact || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'speaker_contact', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'inviter') {
+                return `<td><input type="text" data-idx="${idx}" data-field="inviter" value="${row.inviter || ''}" title="${escapeHtml(row.inviter || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'inviter', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'chairman') {
+                return `<td><input type="text" data-idx="${idx}" data-field="chairman" value="${row.chairman || ''}" title="${escapeHtml(row.chairman || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'chairman', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'interpreter_name') {
+                return `<td class="sl-col-interp"><input type="text" data-idx="${idx}" data-field="interpreter_name" value="${row.interpreter_name || ''}" title="${escapeHtml(row.interpreter_name || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'interpreter_name', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'reader') {
+                return `<td><input type="text" data-idx="${idx}" data-field="reader" value="${row.reader || ''}" title="${escapeHtml(row.reader || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'reader', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'bible_reader') {
+                return `<td class="kr-col-reader"><input type="text" data-idx="${idx}" data-field="bible_reader" value="${row.bible_reader || ''}" title="${escapeHtml(row.bible_reader || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'bible_reader', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'prayer') {
+                return `<td><input type="text" data-idx="${idx}" data-field="prayer" value="${row.prayer || ''}" title="${escapeHtml(row.prayer || '')}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, 'prayer', this.value)" style="border:none; background:transparent;"></td>`;
+            } else if (col.key === 'action') {
+                return `<td>
+                    <div class="action-btn-group">
+                        <button onclick="openMoveModal(${idx})" class="btn-mini" style="background:#0984e3;" title="데이터 이동"><i class="fas fa-arrow-right"></i></button>
+                        <button onclick="addWeekendRow(${idx})" class="btn-mini" style="background:#00b894;" title="추가"><i class="fas fa-plus"></i></button>
+                        <button class="btn-mini" onclick="clearWeekendRow(${idx})" style="background:#e17055;" title="내용 초기화"><i class="fas fa-eraser"></i></button>
+                        <button class="btn-mini" onclick="deleteWeekendRow(${idx})" style="background:#d63031;" title="행 삭제"><i class="fas fa-trash"></i></button>
+                    </div>
+                </td>`;
+            } else {
+                const val = row[col.key] || '';
+                return `<td><input type="text" data-idx="${idx}" data-field="${col.key}" value="${escapeHtml(val)}" title="${escapeHtml(val)}" oninput="this.title=this.value" onmouseenter="this.title=this.value" onchange="updateWeekendData(${idx}, '${col.key}', this.value)" style="border:none; background:transparent;"></td>`;
+            }
+        }).join('');
+
+        tr.innerHTML = rowCellsHtml;
         tbody.appendChild(tr);
     });
+
+    applyCongregationModeUI();
 
     // Handle next focus after render
     if (nextFocusTarget.idx !== null && nextFocusTarget.field !== null) {
@@ -1630,6 +2412,16 @@ window.clearWeekendRow = (idx) => {
     renderWeekendTable();
 };
 
+window.deleteWeekendRow = (idx) => {
+    if (!confirm('이 행을 삭제하시겠습니까? (최종 변경사항 저장 시 서버에 반영됩니다)')) return;
+    const item = weekendData[idx];
+    if (item && item.id) {
+        deletedWeekendIds.push(item.id);
+    }
+    weekendData.splice(idx, 1);
+    renderWeekendTable();
+};
+
 function addWeekendRow(idx) {
     const baseDate = (typeof idx === 'number' && weekendData[idx]) ? weekendData[idx].meeting_date : '';
 
@@ -1659,7 +2451,11 @@ async function saveWeekendData() {
 
     try {
         if (deletedWeekendIds.length > 0) {
-            await supabaseClient.from('public_talks').delete().in('id', deletedWeekendIds);
+            const { error: delErr } = await supabaseClient
+                .from('public_talks')
+                .delete()
+                .in('id', deletedWeekendIds);
+            if (delErr) throw delErr;
             deletedWeekendIds = [];
         }
 
@@ -1681,6 +2477,8 @@ async function saveWeekendData() {
             speaker_contact: d.speaker_contact || null,
             inviter: d.inviter || null,
             chairman: d.chairman || null,
+            interpreter_name: d.interpreter_name || null,
+            is_confirmed: !!d.is_confirmed,
             reader: d.reader || null,
             bible_reader: d.bible_reader || null,
             prayer: d.prayer || null
@@ -1696,6 +2494,8 @@ async function saveWeekendData() {
             speaker_contact: d.speaker_contact || null,
             inviter: d.inviter || null,
             chairman: d.chairman || null,
+            interpreter_name: d.interpreter_name || null,
+            is_confirmed: !!d.is_confirmed,
             reader: d.reader || null,
             bible_reader: d.bible_reader || null,
             prayer: d.prayer || null
@@ -1760,6 +2560,7 @@ async function processOutlinesBulk() {
         if (error) throw error;
 
         resultEl.innerHTML = `<span style="color:#00b894; font-weight:bold;">성공: ${parsed.length}개의 골자가 동기화되었습니다.</span>`;
+        broadcastChange('강연 골자');
         await loadOutlines();
         renderWeekendTable();
     } catch (e) {
@@ -1769,9 +2570,10 @@ async function processOutlinesBulk() {
 
 }
 
-async function loadAdminAccounts() {
-    if (adminInfo.role !== 'superadmin') return;
+let deletedAdminUsernames = [];
 
+async function loadAdminAccounts() {
+    if (!adminInfo || adminInfo.role !== 'superadmin') return;
 
     try {
         const { data, error } = await supabaseClient
@@ -1782,37 +2584,37 @@ async function loadAdminAccounts() {
         if (error) throw error;
         adminUsers = data || [];
         deletedAdminIds = [];
+        deletedAdminUsernames = [];
         renderAdminAccountsTable();
     } catch (e) {
         console.error(e);
-        alert('계정 정보를 불러오는 중 오류 발생');
+        alert('계정 정보를 불러오는 중 오류 발생: ' + (e.message || e));
     }
-
 }
 
 function renderAdminAccountsTable() {
     const tbody = document.querySelector('#admin-accounts-table tbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
 
     adminUsers.forEach((user, idx) => {
         const tr = document.createElement('tr');
-
         const isSelf = user.username === adminInfo.name;
 
         tr.innerHTML = `
-            <td><input type="text" value="${escapeHtml(user.username)}" onchange="updateAdminUserData(${idx}, 'username', this.value)" ${isSelf ? 'disabled' : ''}></td>
-            <td><input type="text" value="${escapeHtml(user.password)}" onchange="updateAdminUserData(${idx}, 'password', this.value)"></td>
+            <td><input type="text" class="admin-input-username" data-idx="${idx}" value="${escapeHtml(user.username)}" oninput="updateAdminUserData(${idx}, 'username', this.value)" onchange="updateAdminUserData(${idx}, 'username', this.value)" ${isSelf ? 'disabled' : ''} placeholder="아이디/이름"></td>
+            <td><input type="text" class="admin-input-password" data-idx="${idx}" value="${escapeHtml(user.password)}" oninput="updateAdminUserData(${idx}, 'password', this.value)" onchange="updateAdminUserData(${idx}, 'password', this.value)" placeholder="비밀번호"></td>
             <td>
-                <select onchange="updateAdminUserData(${idx}, 'role', this.value)">
+                <select class="admin-select-role" data-idx="${idx}" onchange="updateAdminUserData(${idx}, 'role', this.value)">
                     <option value="superadmin" ${user.role === 'superadmin' ? 'selected' : ''}>최고관리자</option>
                     <option value="admin" ${user.role !== 'superadmin' ? 'selected' : ''}>일반관리자</option>
                 </select>
             </td>
             <td style="text-align:center;">
-                <input type="checkbox" ${user.can_manage_weekday !== false ? 'checked' : ''} onchange="updateAdminUserData(${idx}, 'can_manage_weekday', this.checked)">
+                <input type="checkbox" class="admin-check-weekday" data-idx="${idx}" ${user.can_manage_weekday !== false ? 'checked' : ''} onchange="updateAdminUserData(${idx}, 'can_manage_weekday', this.checked)">
             </td>
             <td style="text-align:center;">
-                <input type="checkbox" ${user.can_manage_weekend !== false ? 'checked' : ''} onchange="updateAdminUserData(${idx}, 'can_manage_weekend', this.checked)">
+                <input type="checkbox" class="admin-check-weekend" data-idx="${idx}" ${user.can_manage_weekend !== false ? 'checked' : ''} onchange="updateAdminUserData(${idx}, 'can_manage_weekend', this.checked)">
             </td>
             <td style="text-align:center;">
                 ${isSelf ? '-' : `<span class="btn-delete" onclick="deleteAdminAccount(${idx})"><i class="fas fa-trash"></i></span>`}
@@ -1823,13 +2625,16 @@ function renderAdminAccountsTable() {
 }
 
 window.updateAdminUserData = (idx, field, value) => {
-    adminUsers[idx][field] = value;
+    if (adminUsers[idx]) {
+        adminUsers[idx][field] = value;
+    }
 };
 
 window.deleteAdminAccount = (idx) => {
     if (!confirm('이 계정을 삭제하시겠습니까?')) return;
     const user = adminUsers[idx];
     if (user.id) deletedAdminIds.push(user.id);
+    if (user.username) deletedAdminUsernames.push(user.username.trim());
     adminUsers.splice(idx, 1);
     renderAdminAccountsTable();
 };
@@ -1846,34 +2651,119 @@ function addAdminAccountRow() {
 }
 
 async function saveAdminAccounts() {
+    // 1. DOM의 실제 입력값으로 adminUsers 배열 완벽 동기화
+    const rows = document.querySelectorAll('#admin-accounts-table tbody tr');
+    rows.forEach((row, idx) => {
+        if (!adminUsers[idx]) return;
+        const uInput = row.querySelector('.admin-input-username');
+        const pInput = row.querySelector('.admin-input-password');
+        const rSelect = row.querySelector('.admin-select-role');
+        const wCheck = row.querySelector('.admin-check-weekday');
+        const weCheck = row.querySelector('.admin-check-weekend');
+
+        if (uInput && !uInput.disabled) adminUsers[idx].username = uInput.value.trim();
+        if (pInput) adminUsers[idx].password = pInput.value.trim();
+        if (rSelect) adminUsers[idx].role = rSelect.value;
+        if (wCheck) adminUsers[idx].can_manage_weekday = wCheck.checked;
+        if (weCheck) adminUsers[idx].can_manage_weekend = weCheck.checked;
+    });
+
+    // 2. 유효성 검사 (빈 값 및 중복 체크)
+    const seenUsernames = new Set();
+    for (let i = 0; i < adminUsers.length; i++) {
+        const u = adminUsers[i];
+        if (!u.username || !u.username.trim()) {
+            alert(`[${i + 1}번째 행] 이름(ID)을 입력해 주세요.`);
+            return;
+        }
+        if (!u.password || !u.password.trim()) {
+            alert(`[${i + 1}번째 행 (${u.username})] 비밀번호를 입력해 주세요.`);
+            return;
+        }
+        const trimmedU = u.username.trim();
+        if (seenUsernames.has(trimmedU)) {
+            alert(`계정 이름 "${trimmedU}"이(가) 중복되어 있습니다. 서로 다른 이름을 사용해 주세요.`);
+            return;
+        }
+        seenUsernames.add(trimmedU);
+    }
 
     try {
+        // 3. 삭제 처리
         if (deletedAdminIds.length > 0) {
-            await supabaseClient.from('admin_users').delete().in('id', deletedAdminIds);
+            const { error: delErr } = await supabaseClient.from('admin_users').delete().in('id', deletedAdminIds);
+            if (delErr) console.warn('[AdminAccounts] Delete error:', delErr);
             deletedAdminIds = [];
         }
 
-        const toInsert = adminUsers.filter(u => !u.id);
-        const toUpdate = adminUsers.filter(u => u.id);
+        // 4. 추가 및 수정 처리
+        const toInsert = adminUsers.filter(u => !u.id).map(u => ({
+            username: u.username.trim(),
+            password: u.password.trim(),
+            role: u.role,
+            can_manage_weekday: u.can_manage_weekday !== false,
+            can_manage_weekend: u.can_manage_weekend !== false
+        }));
+        const toUpdate = adminUsers.filter(u => u.id).map(u => ({
+            id: u.id,
+            username: u.username.trim(),
+            password: u.password.trim(),
+            role: u.role,
+            can_manage_weekday: u.can_manage_weekday !== false,
+            can_manage_weekend: u.can_manage_weekend !== false
+        }));
 
         if (toInsert.length > 0) {
-            const { error } = await supabaseClient.from('admin_users').insert(toInsert);
-            if (error) throw error;
+            const { error: insErr } = await supabaseClient.from('admin_users').insert(toInsert);
+            if (insErr) throw insErr;
         }
         if (toUpdate.length > 0) {
-            const { error } = await supabaseClient.from('admin_users').upsert(toUpdate);
-            if (error) throw error;
+            const { error: updErr } = await supabaseClient.from('admin_users').upsert(toUpdate);
+            if (updErr) throw updErr;
+        }
+
+        // 5. 커스텀 DB 사용 중인 경우 메인 DB의 database_connections 테이블에도 자동 동기화
+        if (defaultSupabaseClient && (APP_CONFIG.SUPABASE_URL !== defaultUrl || sessionStorage.getItem('SESSION_SUPABASE_URL') || localStorage.getItem('CUSTOM_SUPABASE_URL'))) {
+            try {
+                // 삭제된 사용자 database_connections에서도 제거
+                if (deletedAdminUsernames.length > 0) {
+                    await defaultSupabaseClient
+                        .from('database_connections')
+                        .delete()
+                        .in('username', deletedAdminUsernames);
+                    deletedAdminUsernames = [];
+                }
+
+                // 현재 등록된 모든 관리자 계정을 database_connections에 매핑 등록
+                const webConnsToUpsert = adminUsers.map(u => ({
+                    username: u.username.trim(),
+                    password: u.password.trim(),
+                    supabase_url: APP_CONFIG.SUPABASE_URL,
+                    supabase_key: APP_CONFIG.SUPABASE_KEY
+                }));
+
+                if (webConnsToUpsert.length > 0) {
+                    await defaultSupabaseClient
+                        .from('database_connections')
+                        .upsert(webConnsToUpsert);
+                    console.log('[AdminAccounts] 중앙 database_connections 동기화 완료');
+                }
+            } catch (syncErr) {
+                console.warn('[AdminAccounts] 중앙 database_connections 동기화 건너뜀/오류:', syncErr);
+            }
         }
 
         alert('계정 정보가 성공적으로 저장되었습니다.');
+        broadcastChange('관리자 계정');
         await loadAdminAccounts();
     } catch (e) {
         console.error(e);
-        alert('저장 중 오류 발생');
+        alert('계정 저장 중 오류 발생: ' + (e.message || e));
     }
-
 }
 let presenceChannel = null;
+const currentSessionId = 'sess_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+let syncCountdownTimer = null;
 
 function initPresence() {
     if (!adminInfo || !adminInfo.name) return;
@@ -1890,13 +2780,17 @@ function initPresence() {
             updatePresenceUI(state);
         })
         .on('broadcast', { event: 'data_saved' }, ({ payload }) => {
-            showSyncToast(payload.adminName, payload.tabType);
+            if (!payload) return;
+            // 본인 세션에서 보낸 이벤트는 무시
+            if (payload.sessionId === currentSessionId) return;
+            triggerSyncAutoReload(payload.adminName || '다른 관리자', payload.tabType || '데이터');
         })
         .subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
                 await presenceChannel.track({
                     name: adminInfo.name,
                     online_at: new Date().toISOString(),
+                    sessionId: currentSessionId
                 });
             }
         });
@@ -1936,35 +2830,54 @@ function broadcastChange(tabType) {
             type: 'broadcast',
             event: 'data_saved',
             payload: {
-                adminName: adminInfo.name,
-                tabType: tabType
+                adminName: (adminInfo && adminInfo.name) ? adminInfo.name : '관리자',
+                tabType: tabType,
+                sessionId: currentSessionId
             }
         });
     }
 }
 
-function showSyncToast(adminName, tabType) {
-    const toast = document.getElementById('sync-toast');
-    const msg = document.getElementById('sync-toast-msg');
-    const btn = document.getElementById('btn-sync-now');
+function triggerSyncAutoReload(adminName, tabType) {
+    const modal = document.getElementById('sync-auto-reload-modal');
+    const msg = document.getElementById('sync-modal-msg');
+    const countdownEl = document.getElementById('sync-countdown-text');
+    const btnNow = document.getElementById('btn-sync-reload-now');
 
-    if (!toast || !msg || !btn) return;
+    if (!modal) {
+        alert(`[데이터 동기화 알림]\n\n'${adminName}' 관리자가 [${tabType}] 데이터를 저장했습니다.\n데이터 덮어쓰기 방지를 위해 최신 데이터로 새로고침합니다.`);
+        location.reload();
+        return;
+    }
 
-    msg.innerHTML = `방금 <b>${adminName}</b> 관리자가 <b>${tabType}</b>에서 저장했습니다.`;
-    toast.style.display = 'flex';
+    if (msg) {
+        msg.innerHTML = `<strong>${escapeHtml(adminName)}</strong> 관리자가 <strong>[${escapeHtml(tabType)}]</strong> 데이터를 저장했습니다.<br><span style="color:var(--danger); font-weight:700;">데이터 덮어쓰기(충돌)를 방지</span>하기 위해 최신 화면으로 자동 새로고침합니다.`;
+    }
 
-    btn.onclick = () => {
-        if (confirm('최신 데이터를 불러오시겠습니까? 현재까지 저장하지 않은 작업 내용은 소실됩니다.')) {
-            loadAllData();
-            toast.style.display = 'none';
+    modal.style.display = 'flex';
+
+    if (btnNow) {
+        btnNow.onclick = () => {
+            if (syncCountdownTimer) clearInterval(syncCountdownTimer);
+            location.reload();
+        };
+    }
+
+    let remainingSec = 2;
+    if (countdownEl) {
+        countdownEl.textContent = `${remainingSec}초 후 자동으로 새로고침됩니다...`;
+    }
+
+    if (syncCountdownTimer) clearInterval(syncCountdownTimer);
+    syncCountdownTimer = setInterval(() => {
+        remainingSec--;
+        if (remainingSec <= 0) {
+            clearInterval(syncCountdownTimer);
+            location.reload();
+        } else if (countdownEl) {
+            countdownEl.textContent = `${remainingSec}초 후 자동으로 새로고침됩니다...`;
         }
-    };
-
-    setTimeout(() => {
-        if (toast.style.display === 'flex') {
-            toast.style.display = 'none';
-        }
-    }, 10000);
+    }, 1000);
 }
 
 // ==========================================
@@ -1993,8 +2906,17 @@ function renderPublishersTable() {
     if (!tbody) return;
     tbody.innerHTML = '';
 
+    const grades = (masterItems && masterItems.interpretation_grades) ? masterItems.interpretation_grades : ['A', 'B', 'C', 'D'];
+
     publishers.forEach((p, idx) => {
         const tr = document.createElement('tr');
+        
+        const gradeOptions = ['없음', ...grades].map(g => {
+            const val = g === '없음' ? '' : g;
+            const sel = p.interpretation_grade === val ? 'selected' : '';
+            return `<option value="${val}" ${sel}>${escapeHtml(g)}</option>`;
+        }).join('');
+
         tr.innerHTML = `
             <td><input type="text" value="${escapeHtml(p.name || '')}" onchange="updatePublisherData(${idx}, 'name', this.value)" style="width:100%;"></td>
             <td>
@@ -2004,6 +2926,8 @@ function renderPublishersTable() {
                 </select>
             </td>
             <td><input type="number" value="${p.birth_year || ''}" onchange="updatePublisherData(${idx}, 'birth_year', parseInt(this.value))" placeholder="1990" style="width:100%;"></td>
+            <td class="sl-col-deaf" style="text-align:center;"><input type="checkbox" ${p.is_deaf ? 'checked' : ''} onchange="updatePublisherData(${idx}, 'is_deaf', this.checked)"></td>
+            <td class="sl-col-interp-grade"><select onchange="updatePublisherData(${idx}, 'interpretation_grade', this.value)" style="width:100%; font-size:0.75rem;">${gradeOptions}</select></td>
             <td><input type="checkbox" ${p.can_chairman ? 'checked' : ''} onchange="updatePublisherData(${idx}, 'can_chairman', this.checked)"></td>
             <td><input type="checkbox" ${p.can_prayer ? 'checked' : ''} onchange="updatePublisherData(${idx}, 'can_prayer', this.checked)"></td>
             <td><input type="checkbox" ${p.can_reading ? 'checked' : ''} onchange="updatePublisherData(${idx}, 'can_reading', this.checked)"></td>
@@ -2022,6 +2946,8 @@ function renderPublishersTable() {
         `;
         tbody.appendChild(tr);
     });
+
+    applyCongregationModeUI();
 }
 
 window.updatePublisherData = (idx, field, value) => {
@@ -2037,6 +2963,8 @@ function addPublisherRow() {
         name: '',
         gender: '남',
         birth_year: null,
+        is_deaf: false,
+        interpretation_grade: '',
         can_chairman: false,
         can_prayer: false,
         can_reading: false,
@@ -2074,6 +3002,8 @@ async function savePublishers() {
             name: p.name || '',
             gender: p.gender || '남',
             birth_year: (p.birth_year === null || isNaN(p.birth_year)) ? null : parseInt(p.birth_year),
+            is_deaf: !!p.is_deaf,
+            interpretation_grade: p.interpretation_grade || null,
             can_chairman: !!p.can_chairman,
             can_prayer: !!p.can_prayer,
             can_reading: !!p.can_reading,
@@ -2104,6 +3034,7 @@ async function savePublishers() {
         }
 
         alert('전도인 명단이 저장되었습니다.');
+        broadcastChange('전도인 관리');
         loadPublishers();
     } catch (e) {
         console.error(e);
@@ -3040,6 +3971,15 @@ async function loadPrintTab() {
             }, 100);
         }
 
+        // Theme custom color visibility toggle
+        const themeSelect = document.getElementById('print-weekend-theme');
+        const customWrap = document.getElementById('print-weekend-custom-color-wrap');
+        if (themeSelect && customWrap) {
+            themeSelect.onchange = function() {
+                customWrap.style.display = (themeSelect.value === 'custom') ? 'flex' : 'none';
+            };
+        }
+
     } catch (e) {
         console.error('Error loading print tab data:', e);
         alert('인쇄 데이터를 로드하는 중 오류가 발생했습니다.');
@@ -3075,79 +4015,64 @@ async function triggerPrintFlow() {
         }
     }
 
-    generatePrintView(selectedWeeks, congName, fontPrint);
+    // Read print1-scale-mode option
+    const scaleMode = document.querySelector('input[name="print-scale-mode"]:checked')?.value || 'scale';
+
+    // Generate Print View in new window
+    generatePrintView(selectedWeeks, congName, fontPrint, scaleMode);
 }
 
-async function updateWeekendPrintBudget() {
-    const startDate = document.getElementById('print-weekend-start-date').value;
-    const endDate = document.getElementById('print-weekend-end-date').value;
+function updateWeekendPrintBudget() {
+    const startInput = document.getElementById('print-weekend-start-date');
+    const endInput = document.getElementById('print-weekend-end-date');
     const infoEl = document.getElementById('print-weekend-budget-info');
-    if (!infoEl) return;
+    if (!startInput || !endInput || !infoEl) return;
 
+    const startDate = startInput.value;
+    const endDate = endInput.value;
     if (!startDate || !endDate) {
-        infoEl.innerHTML = `<span style="color: var(--gray-500); font-weight: 500;">출력 기간을 설정해 주세요.</span>`;
+        infoEl.innerHTML = `<span style="color: var(--gray-400); font-size: 0.78rem;">시작일과 종료일을 모두 선택해 주세요.</span>`;
         return;
     }
 
-    if (new Date(startDate) > new Date(endDate)) {
-        infoEl.innerHTML = `<span style="color: var(--danger); font-weight: 600;">⚠️ 시작일이 종료일보다 늦습니다.</span>`;
+    const dStart = new Date(startDate);
+    const dEnd = new Date(endDate);
+    if (dStart > dEnd) {
+        infoEl.innerHTML = `<span style="color: var(--danger); font-weight: 600; font-size: 0.78rem;"><i class="fas fa-exclamation-circle"></i> 시작일이 종료일보다 늦습니다.</span>`;
         return;
     }
 
     try {
-        const { count, error } = await supabaseClient
-            .from('public_talks')
-            .select('*', { count: 'exact', head: true })
-            .gte('meeting_date', startDate)
-            .lte('meeting_date', endDate);
-
-        if (error) throw error;
-
-        const maxPageCapacity = 16; // fits comfortably on 1 A4 page
-        const isSafe = count <= maxPageCapacity;
-
-        let statusHtml = '';
-        if (count === 0) {
-            statusHtml = `<span style="color: var(--warning); font-weight: 600;">⚠️ 선택한 기간에 등록된 일정이 없습니다.</span>`;
-        } else if (isSafe) {
-            statusHtml = `<span style="color: var(--success); font-weight: 600;">✅ 현재 ${count}개 일정 등록됨 - A4 1페이지 내에 안정적으로 인쇄 가능합니다.</span>`;
-        } else {
-            statusHtml = `<span style="color: var(--danger); font-weight: 600;">❌ 현재 ${count}개 일정 등록됨 - A4 1페이지 용량(16개)을 초과하여 페이지가 잘리거나 넘어갈 수 있습니다.</span>`;
+        // Calculate weeks in range
+        let count = 0;
+        let curr = new Date(dStart);
+        while (curr <= dEnd) {
+            count++;
+            curr.setDate(curr.getDate() + 7);
         }
 
-        // Calculate max months recommendation from start date
-        const { data: futureSlots } = await supabaseClient
-            .from('public_talks')
-            .select('meeting_date')
-            .gte('meeting_date', startDate)
-            .order('meeting_date', { ascending: true })
-            .limit(maxPageCapacity + 1);
+        let statusHtml = "";
+        let recommendHtml = "";
 
-        let recommendHtml = '';
-        if (futureSlots && futureSlots.length > 0) {
-            const availableCount = Math.min(futureSlots.length, maxPageCapacity);
-            const targetSlot = futureSlots[availableCount - 1];
-
-            const startD = new Date(startDate);
-            const targetD = new Date(targetSlot.meeting_date);
-            const diffMonths = ((targetD.getFullYear() - startD.getFullYear()) * 12) + (targetD.getMonth() - startD.getMonth()) + 1;
-
-            recommendHtml = `
-                <div style="margin-top: 8px; font-size: 0.74rem; color: var(--gray-600); line-height: 1.4;">
-                    💡 <strong>1페이지 최적화 가이드:</strong> 시작일 기준 최대 <strong>${diffMonths}개월</strong> 분량(${availableCount}개 일정)을 권장합니다.<br>
-                    <button type="button" class="btn-mini" style="margin-top: 6px; font-size: 0.7rem; padding: 2px 8px; height: auto; background: var(--success); border: 1px solid var(--success-border); color: #fff;" onclick="optimizeWeekendPrintRange('${targetSlot.meeting_date}')">
-                        최적화된 종료일로 설정 (~ ${targetSlot.meeting_date})
-                    </button>
-                </div>
+        if (count <= 16) {
+            statusHtml = `
+                <span style="color: var(--success); font-weight: 700;">
+                    <i class="fas fa-check-circle"></i> A4 1페이지 최적 범위 (${count}개 주차 / 약 ${Math.ceil(count / 4.3)}개월)
+                </span>
+                <span style="color: var(--gray-600); font-size: 0.75rem; margin-left: 6px;">- 1장에 깔끔하게 들어갑니다.</span>
+            `;
+        } else {
+            statusHtml = `
+                <span style="color: var(--danger); font-weight: 700;">
+                    <i class="fas fa-exclamation-triangle"></i> 용량 초과 주의 (${count}개 주차)
+                </span>
+                <span style="color: var(--gray-600); font-size: 0.75rem; margin-left: 6px;">- 16주 초과 시 2페이지로 넘어갈 수 있습니다.</span>
             `;
         }
 
         infoEl.innerHTML = `
-            <div style="padding: 10px; background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: var(--radius-sm);">
-                <div style="font-size: 0.78rem; display: flex; align-items: center; gap: 6px;">
-                    ${statusHtml}
-                </div>
-                ${recommendHtml}
+            <div style="padding: 10px; background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: var(--radius-sm); font-size: 0.78rem;">
+                ${statusHtml}
             </div>
         `;
     } catch (e) {
@@ -3155,11 +4080,6 @@ async function updateWeekendPrintBudget() {
         infoEl.innerHTML = `<span style="color: var(--danger); font-weight: 500;">계산 중 오류 발생</span>`;
     }
 }
-
-window.optimizeWeekendPrintRange = (optimizedEndDate) => {
-    document.getElementById('print-weekend-end-date').value = optimizedEndDate;
-    updateWeekendPrintBudget();
-};
 
 async function triggerWeekendPrintFlow() {
     const startDate = document.getElementById('print-weekend-start-date').value;
@@ -3189,6 +4109,8 @@ async function triggerWeekendPrintFlow() {
 
         let fontPrint = 'Pretendard';
         let congName = '춘천남부회중';
+        let currentCongType = localStorage.getItem('CONGREGATION_TYPE') || 'korean';
+
         try {
             const { data: settingsData } = await supabaseClient
                 .from('app_settings')
@@ -3196,6 +4118,8 @@ async function triggerWeekendPrintFlow() {
             if (settingsData) {
                 fontPrint = settingsData.find(s => s.key === 'font_print')?.value || 'Pretendard';
                 congName = settingsData.find(s => s.key === 'congregation_name')?.value || '춘천남부회중';
+                const dbCongType = settingsData.find(s => s.key === 'congregation_type')?.value;
+                if (dbCongType) currentCongType = dbCongType;
             }
         } catch (e) {
             console.warn('설정 로드 실패:', e);
@@ -3205,51 +4129,80 @@ async function triggerWeekendPrintFlow() {
             }
         }
 
-        // Read selected scale mode option
-        const scaleMode = document.querySelector('input[name="print-weekend-scale-mode"]:checked')?.value || 'scale';
+        // 여백 및 맞춤 옵션 읽기
+        const marginTop = parseInt(document.getElementById('print-weekend-margin-top')?.value || 10, 10);
+        const marginBottom = parseInt(document.getElementById('print-weekend-margin-bottom')?.value || 10, 10);
+        const marginLeft = parseInt(document.getElementById('print-weekend-margin-left')?.value || 12, 10);
+        const marginRight = parseInt(document.getElementById('print-weekend-margin-right')?.value || 12, 10);
+        const rowMode = document.getElementById('print-weekend-row-mode')?.value || 'fill';
+        const themeName = document.getElementById('print-weekend-theme')?.value || 'blue';
+        const customColor = document.getElementById('print-weekend-custom-color')?.value || '#2563eb';
 
-        generateWeekendPrintView(data, congName, fontPrint, scaleMode);
+        // 설정 메뉴의 회중 유형(congregation_type)을 기준으로 통역 컬럼 자동 판단
+        const includeInterp = (currentCongType === 'sign_language');
+
+        generateWeekendPrintView(data, congName, fontPrint, rowMode, includeInterp, marginTop, marginBottom, marginLeft, marginRight, themeName, customColor);
     } catch (e) {
         console.error(e);
         alert('주말집회 데이터를 로드하는 중 오류가 발생했습니다.');
     }
 }
 
-function generateWeekendPrintView(weekendList, congregationName, fontPrint = 'Pretendard', scaleMode = 'scale') {
+function generateWeekendPrintView(weekendList, congregationName, fontPrint = 'Pretendard', rowMode = 'fill', includeInterp = false, initMarginTop = 10, initMarginBottom = 10, initMarginLeft = 12, initMarginRight = 12, initTheme = 'blue', initCustomColor = '#2563eb') {
     const originUrl = window.location.href;
 
     let rowsHtml = '';
-    let lastMonth = '';
+    let lastMonthKey = '';
+    let monthColorToggle = false;
+
+    // 회중명 포맷팅: 6글자 초과 시 깔끔하게 줄바꿈
+    function formatCongName(name) {
+        if (!name) return '';
+        const trimmed = name.trim();
+        if (trimmed.length > 6) {
+            const splitIdx = Math.ceil(trimmed.length / 2);
+            return `${escapeHtml(trimmed.slice(0, splitIdx))}<br>${escapeHtml(trimmed.slice(splitIdx))}`;
+        }
+        return escapeHtml(trimmed);
+    }
 
     weekendList.forEach((r, idx) => {
         const d = new Date(r.meeting_date);
-        const curMonth = `${d.getFullYear()}-${d.getMonth() + 1}`;
+        const curMonthKey = `${d.getFullYear()}-${d.getMonth() + 1}`;
 
-        let rowClass = "";
-        if (idx !== 0 && curMonth !== lastMonth) {
-            rowClass = "month-border-top";
+        let isMonthStart = false;
+        if (idx === 0) {
+            isMonthStart = true;
+            monthColorToggle = false;
+        } else if (curMonthKey !== lastMonthKey) {
+            isMonthStart = true;
+            monthColorToggle = !monthColorToggle;
         }
-        lastMonth = curMonth;
+        lastMonthKey = curMonthKey;
+
+        const monthBgClass = monthColorToggle ? 'month-odd' : 'month-even';
+        const monthStartClass = isMonthStart && idx !== 0 ? 'month-start' : '';
 
         const topic = r.topic || '';
         const dateStr = `${String(d.getFullYear()).slice(-2)}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
 
         rowsHtml += `
-            <tr class="${rowClass}">
-                <td style="text-align: center; font-size: 0.88rem; font-weight: 500;">${dateStr}</td>
-                <td style="text-align: center; font-size: 0.88rem;">${escapeHtml(r.outline_no || '')}</td>
-                <td style="text-align: left; font-size: 0.94rem; font-weight: 600; padding-left: 8px; line-height: 1.35; word-break: keep-all; white-space: normal;">${escapeHtml(topic)}</td>
-                <td style="text-align: center; font-size: 0.94rem; font-weight: 700;">${escapeHtml(r.speaker || '')}</td>
-                <td style="text-align: center; font-size: 0.9rem;">${escapeHtml(r.congregation || '')}</td>
-                <td style="text-align: center; font-size: 0.9rem;">${escapeHtml(r.chairman || '')}</td>
-                <td style="text-align: center; font-size: 0.9rem;">${escapeHtml(r.reader || '')}</td>
-                <td style="text-align: center; font-size: 0.9rem;">${escapeHtml(r.bible_reader || '')}</td>
-                <td style="text-align: center; font-size: 0.9rem;">${escapeHtml(r.prayer || '')}</td>
+            <tr class="${monthBgClass} ${monthStartClass}" data-row-idx="${idx}">
+                <td class="col-date">${dateStr}</td>
+                <td class="col-center col-outline">${escapeHtml(r.outline_no || '')}</td>
+                <td class="col-left col-topic">${escapeHtml(topic)}</td>
+                <td class="col-center col-speaker">${escapeHtml(r.speaker || '')}</td>
+                <td class="col-center col-cong">${formatCongName(r.congregation || '')}</td>
+                ${includeInterp ? `<td class="col-center col-interp">${escapeHtml(r.interpreter_name || '')}</td>` : ''}
+                <td class="col-center col-part">${escapeHtml(r.chairman || '')}</td>
+                <td class="col-center col-part">${escapeHtml(r.reader || '')}</td>
+                ${!includeInterp ? `<td class="col-center col-part">${escapeHtml(r.bible_reader || '')}</td>` : ''}
+                <td class="col-center col-part">${escapeHtml(r.prayer || '')}</td>
             </tr>
         `;
     });
 
-    const printWindow = window.open('', '_blank', 'width=900,height=950');
+    const printWindow = window.open('', '_blank', 'width=1150,height=1000');
     if (!printWindow) {
         alert('팝업 차단이 활성화되어 있습니다. 팝업 허용 후 다시 시도해 주세요.');
         return;
@@ -3260,8 +4213,9 @@ function generateWeekendPrintView(weekendList, congregationName, fontPrint = 'Pr
         <html>
         <head>
             <meta charset="utf-8">
-            <title>${escapeHtml(congregationName)} 공개 강연 계획표</title>
-            <style>
+            <title>공개 강연 계획표 - ${escapeHtml(congregationName)}</title>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+            <style id="base-style">
                 @import url('${FONT_CDN_MAP[fontPrint] || FONT_CDN_MAP["Pretendard"]}');
                 
                 * {
@@ -3272,159 +4226,689 @@ function generateWeekendPrintView(weekendList, congregationName, fontPrint = 'Pr
                     font-family: ${FONT_FAMILY_MAP[fontPrint] || FONT_FAMILY_MAP["Pretendard"]};
                     margin: 0;
                     padding: 0;
-                    background-color: #fff;
-                    color: #000;
+                    background-color: #64748b;
+                    color: #0f172a;
                     -webkit-print-color-adjust: exact !important;
                     print-color-adjust: exact !important;
                     font-size: 13px;
-                    line-height: 1.45;
+                    line-height: 1.35;
+                }
+
+                /* ─────────── 상단 반응형 컨트롤 바 (화면 전용, 인쇄 시 숨김) ─────────── */
+                .print-toolbar {
+                    position: sticky;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    z-index: 9999;
+                    background: #0f172a;
+                    color: #fff;
+                    padding: 10px 18px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 14px;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                    font-size: 0.82rem;
+                }
+
+                .toolbar-group {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    flex-wrap: wrap;
+                }
+
+                .toolbar-item {
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                }
+
+                .toolbar-item label {
+                    color: #94a3b8;
+                    font-weight: 600;
+                    white-space: nowrap;
+                }
+
+                .toolbar-input {
+                    background: #1e293b;
+                    border: 1px solid #475569;
+                    color: #fff;
+                    padding: 4px 6px;
+                    border-radius: 4px;
+                    font-size: 0.82rem;
+                    text-align: center;
+                    font-weight: 600;
+                }
+
+                .toolbar-btn {
+                    padding: 7px 18px;
+                    border-radius: 6px;
+                    font-weight: 700;
+                    font-size: 0.86rem;
+                    cursor: pointer;
+                    border: none;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    transition: all 0.2s;
+                }
+
+                .btn-print {
+                    background: #2563eb;
+                    color: #fff;
+                    box-shadow: 0 2px 6px rgba(37,99,235,0.4);
+                }
+                .btn-print:hover {
+                    background: #1d4ed8;
+                }
+
+                .btn-close {
+                    background: #334155;
+                    color: #e2e8f0;
+                }
+                .btn-close:hover {
+                    background: #475569;
+                }
+
+                /* ─────────── A4 실제 종이 시각화 뷰포트 ─────────── */
+                .page-viewport {
+                    display: flex;
+                    justify-content: center;
+                    align-items: flex-start;
+                    padding: 30px 10px 60px;
+                    min-height: calc(100vh - 55px);
                 }
 
                 @page {
                     size: A4 portrait;
-                    margin: 10mm 15mm 10mm 15mm;
+                    margin: ${initMarginTop}mm ${initMarginRight}mm ${initMarginBottom}mm ${initMarginLeft}mm;
                 }
 
-                .print-page {
-                    width: 100%;
-                    height: 275mm;
+                /* 실제 A4 크기 (210mm x 297mm) 흰색 용지 */
+                .a4-sheet-paper {
+                    background: #ffffff;
+                    width: 210mm;
+                    height: 297mm;
+                    min-height: 297mm;
                     box-sizing: border-box;
                     display: flex;
                     flex-direction: column;
-                    justify-content: flex-start;
-                    overflow: hidden;
+                    box-shadow: 0 15px 40px rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.15);
+                    position: relative;
+                    /* 여백을 패딩으로 시각화 */
+                    padding: ${initMarginTop}mm ${initMarginRight}mm ${initMarginBottom}mm ${initMarginLeft}mm;
+                    transition: padding 0.1s ease-out;
                 }
 
-                .main-header {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: flex-end;
-                    padding-bottom: 6px;
-                    margin-bottom: 12px;
+                /* 여백 내부 실제 인쇄 영역 가이드 */
+                .content-print-area {
                     width: 100%;
-                    border-bottom: 2px solid #000;
+                    height: 100%;
+                    display: flex;
+                    flex-direction: column;
+                    box-sizing: border-box;
+                    position: relative;
+                    outline: 1px dashed rgba(59, 130, 246, 0.4);
+                    outline-offset: 0;
                 }
 
-                .main-header-left {
-                    font-size: 1.4rem;
-                    font-weight: 800;
-                    font-style: italic;
+                .content-print-area.hide-guide {
+                    outline: none !important;
                 }
 
-                .main-header-right {
-                    font-size: 1.4rem;
+                /* 1. 상단 타이틀 & 회중명 */
+                .print-header {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    position: relative;
+                    margin-bottom: 8px;
+                    padding-bottom: 6px;
+                    border-bottom: 2.5px solid #3b82f6;
+                    flex-shrink: 0;
+                }
+
+                .title-main {
+                    font-size: 28pt;
                     font-weight: 800;
-                    font-style: italic;
-                    letter-spacing: 0.05em;
+                    color: #1e3a8a;
+                    letter-spacing: 3px;
+                    line-height: 1.15;
+                    margin: 0;
+                    padding: 2px 0 4px;
+                    text-align: center;
+                }
+
+                .cong-sub-wrap {
+                    width: 100%;
+                    display: flex;
+                    justify-content: flex-end;
+                    align-items: center;
+                    margin-top: -2px;
+                }
+
+                .cong-badge {
+                    font-size: 13pt;
+                    font-weight: 700;
+                    color: #334155;
+                    letter-spacing: 0.5px;
+                }
+
+                .table-container {
+                    width: 100%;
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
                 }
 
                 .data-table {
                     width: 100%;
+                    height: 100%;
                     border-collapse: collapse;
-                    margin-top: 4px;
+                    table-layout: fixed;
+                }
+
+                /* 2. 항목 헤드행 */
+                .data-table thead tr {
+                    height: 38px;
+                    flex-shrink: 0;
                 }
 
                 .data-table th {
-                    background-color: #f2f2f2;
-                    border: 1px solid #333;
+                    background-color: #dbeafe !important;
+                    color: #1e3a8a;
+                    border: 1px solid #93c5fd;
                     font-weight: 700;
-                    font-size: 0.88rem;
-                    padding: 8px 4px;
+                    font-size: 0.92rem;
+                    padding: 4px 2px;
                     text-align: center;
+                    vertical-align: middle;
+                    letter-spacing: 0.5px;
+                }
+
+                /* 3. 본문 각 행: 반응형 동일 높이 계산 */
+                .data-table tbody tr {
+                    box-sizing: border-box;
                 }
 
                 .data-table td {
-                    border: 1px solid #333;
-                    padding: 8px 4px;
+                    border: 1px solid #cbd5e1;
+                    padding: 2px 6px;
                     vertical-align: middle;
+                    font-size: 0.88rem;
+                    box-sizing: border-box;
+                    overflow: hidden;
                 }
 
-                .month-border-top td {
-                    border-top: 3px double #000 !important;
+                /* 4. 날짜열 */
+                .data-table td.col-date {
+                    background-color: #eff6ff !important;
+                    color: #1d4ed8;
+                    font-weight: 600;
+                    text-align: center;
+                    border-left: 1.5px solid #93c5fd;
+                    border-right: 1.5px solid #93c5fd;
+                    font-size: 0.88rem;
+                }
+
+                /* 5. 월단위 연한 배경색 구분 */
+                .month-even {
+                    background-color: #ffffff;
+                }
+                
+                .month-odd {
+                    background-color: #f8fafc;
+                }
+
+                /* 월 경계선 구분 */
+                .month-start td {
+                    border-top: 2.5px solid #60a5fa !important;
+                }
+
+                .col-center {
+                    text-align: center;
+                }
+
+                .col-left {
+                    text-align: left;
+                }
+
+                .col-outline {
+                    font-weight: 600;
+                    color: #334155;
+                    font-size: 0.88rem;
+                }
+
+                .col-topic {
+                    font-weight: 600;
+                    color: #0f172a;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    line-height: 1.35;
+                    word-break: keep-all;
+                    font-size: 0.88rem;
+                }
+
+                .col-speaker {
+                    font-weight: 700;
+                    color: #0f172a;
+                    font-size: 0.90rem;
+                }
+
+                /* 회중명: 6글자 초과 시 줄바꿈 */
+                .col-cong {
+                    color: #334155;
+                    font-size: 0.86rem;
+                    line-height: 1.25;
+                    text-align: center;
+                    word-break: keep-all;
+                }
+
+                .col-part {
+                    font-size: 0.88rem;
+                    color: #1e293b;
+                    font-weight: 500;
+                    white-space: nowrap;
+                    padding: 2px 6px;
+                }
+
+                .col-interp {
+                    font-size: 0.88rem;
+                    color: #6d28d9;
+                    font-weight: 700;
+                    white-space: nowrap;
+                    padding: 2px 6px;
+                }
+
+                /* ─────────── 인쇄 시 툴바 숨김 및 1페이지 완벽 고정 ─────────── */
+                @media print {
+                    .no-print {
+                        display: none !important;
+                    }
+                    html, body {
+                        width: 100% !important;
+                        height: 100% !important;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        overflow: hidden !important;
+                        background: #fff !important;
+                    }
+                    .page-viewport {
+                        padding: 0 !important;
+                        margin: 0 !important;
+                        display: block !important;
+                        width: 100% !important;
+                        height: 100% !important;
+                        min-height: auto !important;
+                        overflow: hidden !important;
+                    }
+                    .a4-sheet-paper {
+                        box-shadow: none !important;
+                        border: none !important;
+                        padding: 0 !important;
+                        margin: 0 !important;
+                        width: 100% !important;
+                        height: 100% !important;
+                        max-height: 100% !important;
+                        min-height: auto !important;
+                        overflow: hidden !important;
+                        page-break-after: avoid !important;
+                        page-break-inside: avoid !important;
+                        break-after: avoid !important;
+                        break-inside: avoid !important;
+                    }
+                    .content-print-area {
+                        outline: none !important;
+                        width: 100% !important;
+                        height: 100% !important;
+                        overflow: hidden !important;
+                        page-break-after: avoid !important;
+                        page-break-inside: avoid !important;
+                        break-after: avoid !important;
+                        break-inside: avoid !important;
+                    }
+                    .data-table {
+                        page-break-after: avoid !important;
+                        page-break-inside: avoid !important;
+                        break-after: avoid !important;
+                        break-inside: avoid !important;
+                    }
+                    .data-table thead {
+                        display: table-row-group !important;
+                    }
+                    .data-table tr {
+                        page-break-after: avoid !important;
+                        page-break-inside: avoid !important;
+                        break-after: avoid !important;
+                        break-inside: avoid !important;
+                    }
                 }
             </style>
         </head>
         <body>
-            <div class="print-page">
-                <div class="main-header">
-                    <div class="main-header-left">${escapeHtml(congregationName)}</div>
-                    <div class="main-header-right">공개 강연 계획표 (주말집회)</div>
+            <!-- 상단 실시간 조절 툴바 -->
+            <div class="print-toolbar no-print">
+                <div class="toolbar-group">
+                    <div class="toolbar-item">
+                        <label title="상단 여백"><i class="fas fa-arrow-up"></i> 상:</label>
+                        <input type="number" id="ctrl-margin-top" class="toolbar-input" value="${initMarginTop}" min="0" max="35" step="1" style="width: 42px;">
+                    </div>
+                    <div class="toolbar-item">
+                        <label title="하단 여백"><i class="fas fa-arrow-down"></i> 하:</label>
+                        <input type="number" id="ctrl-margin-bottom" class="toolbar-input" value="${initMarginBottom}" min="0" max="35" step="1" style="width: 42px;">
+                    </div>
+                    <div class="toolbar-item">
+                        <label title="좌측 여백"><i class="fas fa-arrow-left"></i> 좌:</label>
+                        <input type="number" id="ctrl-margin-left" class="toolbar-input" value="${initMarginLeft}" min="0" max="35" step="1" style="width: 42px;">
+                    </div>
+                    <div class="toolbar-item">
+                        <label title="우측 여백"><i class="fas fa-arrow-right"></i> 우:</label>
+                        <input type="number" id="ctrl-margin-right" class="toolbar-input" value="${initMarginRight}" min="0" max="35" step="1" style="width: 42px;">
+                    </div>
+
+                    <div class="toolbar-item" style="margin-left: 4px;">
+                        <label><i class="fas fa-palette"></i> 테마:</label>
+                        <select id="ctrl-theme" class="toolbar-input" style="width: 110px; cursor: pointer;">
+                            <option value="blue" ${initTheme === 'blue' ? 'selected' : ''}>🔵 블루</option>
+                            <option value="green" ${initTheme === 'green' ? 'selected' : ''}>🟢 그린</option>
+                            <option value="purple" ${initTheme === 'purple' ? 'selected' : ''}>🟣 퍼플</option>
+                            <option value="slate" ${initTheme === 'slate' ? 'selected' : ''}>🟤 슬레이트</option>
+                            <option value="amber" ${initTheme === 'amber' ? 'selected' : ''}>🟠 웜 엠버</option>
+                            <option value="custom" ${initTheme === 'custom' ? 'selected' : ''}>🎨 직접 선택</option>
+                        </select>
+                        <input type="color" id="ctrl-custom-color" value="${initCustomColor}" style="width: 24px; height: 24px; border: 1px solid #475569; border-radius: 4px; cursor: pointer; padding: 0; background: none; ${initTheme === 'custom' ? '' : 'display: none;'}">
+                    </div>
+
+                    <div class="toolbar-item" style="margin-left: 4px;">
+                        <label><i class="fas fa-expand-alt"></i> 행:</label>
+                        <select id="ctrl-row-mode" class="toolbar-input" style="width: 120px; cursor: pointer;">
+                            <option value="fill" ${rowMode === 'fill' ? 'selected' : ''}>A4 꽉 채움</option>
+                            <option value="compact" ${rowMode === 'compact' ? 'selected' : ''}>조밀 (50px)</option>
+                            <option value="standard" ${rowMode === 'standard' ? 'selected' : ''}>표준 (54px)</option>
+                            <option value="relaxed" ${rowMode === 'relaxed' ? 'selected' : ''}>여유 (58px)</option>
+                        </select>
+                    </div>
+
+                    <div class="toolbar-item">
+                        <label><i class="fas fa-text-height"></i> 글자:</label>
+                        <input type="range" id="ctrl-font-scale" min="80" max="125" value="100" step="5" style="width: 55px; cursor: pointer;">
+                        <span id="lbl-font-scale" style="min-width: 30px; font-weight: 600; color: #38bdf8; font-size: 0.75rem;">100%</span>
+                    </div>
+
+                    <div class="toolbar-item">
+                        <label style="cursor: pointer; display: flex; align-items: center; gap: 3px;">
+                            <input type="checkbox" id="ctrl-show-guide" checked style="cursor: pointer;">
+                            <span>점선</span>
+                        </label>
+                    </div>
                 </div>
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 85px;">날짜</th>
-                            <th style="width: 45px;">골자</th>
-                            <th style="width: 250px;">공개 강연 주제</th>
-                            <th style="width: 80px;">연사</th>
-                            <th style="width: 100px;">회중</th>
-                            <th style="width: 75px;">사회</th>
-                            <th style="width: 75px;">파수대</th>
-                            <th style="width: 75px;">낭독</th>
-                            <th style="width: 75px;">기도</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rowsHtml}
-                    </tbody>
-                </table>
+
+                <div class="toolbar-group">
+                    <button class="toolbar-btn btn-print" onclick="window.print()">
+                        <i class="fas fa-print"></i> 지금 인쇄하기
+                    </button>
+                    <button class="toolbar-btn btn-close" onclick="window.close()">
+                        닫기
+                    </button>
+                </div>
+            </div>
+
+            <!-- A4 실제 종이 시각화 뷰포트 -->
+            <div class="page-viewport">
+                <div class="a4-sheet-paper" id="a4-paper-target">
+                    <div class="content-print-area" id="content-area-target">
+                        <div class="print-header" id="print-header-target">
+                            <div class="title-main">공개 강연 계획표</div>
+                            <div class="cong-sub-wrap">
+                                <span class="cong-badge">${escapeHtml(congregationName)}</span>
+                            </div>
+                        </div>
+                        <div class="table-container" id="table-container-target">
+                            <table class="data-table" id="data-table-target">
+                                <thead>
+                                    <tr>
+                                        ${includeInterp ? `
+                                            <th style="width: 10.0%;">날짜</th>
+                                            <th style="width: 6.0%;">골자</th>
+                                            <th style="width: 28.0%;">공개 강연 주제</th>
+                                            <th style="width: 10.0%;">연사</th>
+                                            <th style="width: 14.0%;">회중</th>
+                                            <th style="width: 8.5%;">통역</th>
+                                            <th style="width: 8.0%;">사회</th>
+                                            <th style="width: 8.0%;">파수대</th>
+                                            <th style="width: 7.5%;">기도</th>
+                                        ` : `
+                                            <th style="width: 10.0%;">날짜</th>
+                                            <th style="width: 6.0%;">골자</th>
+                                            <th style="width: 28.5%;">공개 강연 주제</th>
+                                            <th style="width: 10.0%;">연사</th>
+                                            <th style="width: 14.5%;">회중</th>
+                                            <th style="width: 8.0%;">사회</th>
+                                            <th style="width: 8.0%;">파수대</th>
+                                            <th style="width: 7.5%;">낭독</th>
+                                            <th style="width: 7.5%;">기도</th>
+                                        `}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${rowsHtml}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <script>
-                window.onload = function() {
-                    const page = document.querySelector('.print-page');
-                    const table = document.querySelector('.data-table');
-                    const scaleMode = '${scaleMode}';
-                    const maxH = 960; // portrait printable height
-                    
-                    let fontSize = 13.0;
-                    let padding = 8.0;
-                    
-                    // 1단계: 세로 영역을 초과하는 대용량인 경우 축소
-                    let attempts = 0;
-                    while (page.scrollHeight > maxH && fontSize > 9.0 && attempts < 100) {
-                        fontSize -= 0.2;
-                        if (padding > 3.0) padding -= 0.2;
-                        
-                        table.style.fontSize = fontSize + 'px';
-                        table.querySelectorAll('td').forEach(td => {
-                            td.style.paddingTop = padding + 'px';
-                            td.style.paddingBottom = padding + 'px';
-                        });
-                        attempts++;
-                    }
-                    
-                    // 2단계: 여백 채우기 모드인 경우 꽉 찰 때까지 확대
-                    if (scaleMode === 'scale') {
-                        attempts = 0;
-                        while (maxH - page.scrollHeight > 10 && fontSize < 24 && attempts < 100) {
-                            fontSize += 0.2;
-                            padding += 0.2;
-                            
-                            table.style.fontSize = fontSize + 'px';
-                            table.querySelectorAll('td').forEach(td => {
-                                td.style.paddingTop = padding + 'px';
-                                td.style.paddingBottom = padding + 'px';
-                            });
-                            
-                            if (page.scrollHeight > maxH) {
-                                fontSize -= 0.2;
-                                padding -= 0.2;
-                                table.style.fontSize = fontSize + 'px';
-                                table.querySelectorAll('td').forEach(td => {
-                                    td.style.paddingTop = padding + 'px';
-                                    td.style.paddingBottom = padding + 'px';
-                                });
-                                break;
-                            }
-                            attempts++;
-                        }
-                    }
-                    
-                    setTimeout(function() {
-                        window.print();
-                    }, 400);
+                const rowCount = ${weekendList.length};
+                
+                function hexToRgba(hex, alpha) {
+                    let c = hex.replace('#', '');
+                    if (c.length === 3) c = c.split('').map(x => x + x).join('');
+                    const num = parseInt(c, 16);
+                    return 'rgba(' + ((num >> 16) & 255) + ', ' + ((num >> 8) & 255) + ', ' + (num & 255) + ', ' + alpha + ')';
                 }
+
+                function getThemePalette(themeName, customHex) {
+                    switch (themeName) {
+                        case 'green':
+                            return {
+                                title: '#065f46',
+                                headerBorder: '#10b981',
+                                thBg: '#d1fae5',
+                                thText: '#065f46',
+                                thBorder: '#a7f3d0',
+                                dateBg: '#f0fdf4',
+                                dateText: '#047857',
+                                monthBorder: '#34d399',
+                                guide: 'rgba(16, 185, 129, 0.4)'
+                            };
+                        case 'purple':
+                            return {
+                                title: '#581c87',
+                                headerBorder: '#8b5cf6',
+                                thBg: '#f3e8ff',
+                                thText: '#581c87',
+                                thBorder: '#ddd6fe',
+                                dateBg: '#faf5ff',
+                                dateText: '#6d28d9',
+                                monthBorder: '#a78bfa',
+                                guide: 'rgba(139, 92, 246, 0.4)'
+                            };
+                        case 'slate':
+                            return {
+                                title: '#0f172a',
+                                headerBorder: '#475569',
+                                thBg: '#e2e8f0',
+                                thText: '#0f172a',
+                                thBorder: '#cbd5e1',
+                                dateBg: '#f8fafc',
+                                dateText: '#334155',
+                                monthBorder: '#94a3b8',
+                                guide: 'rgba(100, 116, 139, 0.4)'
+                            };
+                        case 'amber':
+                            return {
+                                title: '#78350f',
+                                headerBorder: '#d97706',
+                                thBg: '#fef3c7',
+                                thText: '#78350f',
+                                thBorder: '#fde68a',
+                                dateBg: '#fffbeb',
+                                dateText: '#b45309',
+                                monthBorder: '#f59e0b',
+                                guide: 'rgba(217, 119, 6, 0.4)'
+                            };
+                        case 'custom':
+                            return {
+                                title: customHex,
+                                headerBorder: customHex,
+                                thBg: hexToRgba(customHex, 0.18),
+                                thText: customHex,
+                                thBorder: hexToRgba(customHex, 0.45),
+                                dateBg: hexToRgba(customHex, 0.08),
+                                dateText: customHex,
+                                monthBorder: hexToRgba(customHex, 0.65),
+                                guide: hexToRgba(customHex, 0.4)
+                            };
+                        case 'blue':
+                        default:
+                            return {
+                                title: '#1e3a8a',
+                                headerBorder: '#3b82f6',
+                                thBg: '#dbeafe',
+                                thText: '#1e3a8a',
+                                thBorder: '#93c5fd',
+                                dateBg: '#eff6ff',
+                                dateText: '#1d4ed8',
+                                monthBorder: '#60a5fa',
+                                guide: 'rgba(59, 130, 246, 0.4)'
+                            };
+                    }
+                }
+                
+                function applyResponsiveLayout() {
+                    const marginTop = parseInt(document.getElementById('ctrl-margin-top').value || 10, 10);
+                    const marginBottom = parseInt(document.getElementById('ctrl-margin-bottom').value || 10, 10);
+                    const marginLeft = parseInt(document.getElementById('ctrl-margin-left').value || 12, 10);
+                    const marginRight = parseInt(document.getElementById('ctrl-margin-right').value || 12, 10);
+                    const rowMode = document.getElementById('ctrl-row-mode').value;
+                    const fontScale = parseInt(document.getElementById('ctrl-font-scale').value || 100, 10);
+                    const showGuide = document.getElementById('ctrl-show-guide').checked;
+                    const themeName = document.getElementById('ctrl-theme').value;
+                    const customHex = document.getElementById('ctrl-custom-color').value || '#2563eb';
+
+                    // Toggle custom color picker in toolbar
+                    const customColorInput = document.getElementById('ctrl-custom-color');
+                    customColorInput.style.display = (themeName === 'custom') ? 'inline-block' : 'none';
+
+                    document.getElementById('lbl-font-scale').textContent = fontScale + '%';
+
+                    // Dynamic Theme Palette CSS Injection
+                    const pal = getThemePalette(themeName, customHex);
+                    let themeStyle = document.getElementById('dyn-theme-style');
+                    if (!themeStyle) {
+                        themeStyle = document.createElement('style');
+                        themeStyle.id = 'dyn-theme-style';
+                        document.head.appendChild(themeStyle);
+                    }
+                    themeStyle.innerHTML = 
+                        '.title-main { color: ' + pal.title + ' !important; }' +
+                        '.print-header { border-bottom-color: ' + pal.headerBorder + ' !important; }' +
+                        '.data-table th { background-color: ' + pal.thBg + ' !important; color: ' + pal.thText + ' !important; border-color: ' + pal.thBorder + ' !important; }' +
+                        '.data-table td.col-date { background-color: ' + pal.dateBg + ' !important; color: ' + pal.dateText + ' !important; border-left-color: ' + pal.thBorder + ' !important; border-right-color: ' + pal.thBorder + ' !important; }' +
+                        '.month-start td { border-top-color: ' + pal.monthBorder + ' !important; }' +
+                        '.content-print-area { outline-color: ' + pal.guide + ' !important; }';
+
+                    // Update @page margin via dynamic style element
+                    let dynStyle = document.getElementById('dyn-print-style');
+                    if (!dynStyle) {
+                        dynStyle = document.createElement('style');
+                        dynStyle.id = 'dyn-print-style';
+                        document.head.appendChild(dynStyle);
+                    }
+                    dynStyle.innerHTML = '@page { size: A4 portrait; margin: ' + marginTop + 'mm ' + marginRight + 'mm ' + marginBottom + 'mm ' + marginLeft + 'mm !important; }';
+
+                    // Update visible A4 paper sheet padding to simulate margin on screen
+                    const paper = document.getElementById('a4-paper-target');
+                    paper.style.padding = marginTop + 'mm ' + marginRight + 'mm ' + marginBottom + 'mm ' + marginLeft + 'mm';
+
+                    // Toggle guide outline
+                    const contentArea = document.getElementById('content-area-target');
+                    if (showGuide) {
+                        contentArea.classList.remove('hide-guide');
+                    } else {
+                        contentArea.classList.add('hide-guide');
+                    }
+
+                    // Calculate accurate available height for table (with safety buffer to guarantee single page)
+                    const header = document.getElementById('print-header-target');
+                    const headerHeight = header.offsetHeight || 60;
+                    const availableH = contentArea.clientHeight - headerHeight - 40 - 12; // 12px safe buffer
+
+                    const table = document.getElementById('data-table-target');
+                    const trList = table.querySelectorAll('tbody tr');
+                    let targetRowHeight = 50;
+
+                    if (rowMode === 'fill') {
+                        targetRowHeight = Math.floor(availableH / rowCount);
+                        if (targetRowHeight < 34) targetRowHeight = 34;
+                    } else if (rowMode === 'compact') {
+                        targetRowHeight = 48;
+                    } else if (rowMode === 'standard') {
+                        targetRowHeight = 52;
+                    } else if (rowMode === 'relaxed') {
+                        targetRowHeight = 56;
+                    }
+
+                    // Apply 100% IDENTICAL height across ALL rows
+                    trList.forEach(tr => {
+                        tr.style.height = targetRowHeight + 'px';
+                        tr.querySelectorAll('td').forEach(td => {
+                            td.style.height = targetRowHeight + 'px';
+                            td.style.paddingTop = Math.max(1, Math.floor(targetRowHeight * 0.06)) + 'px';
+                            td.style.paddingBottom = Math.max(1, Math.floor(targetRowHeight * 0.06)) + 'px';
+                        });
+                    });
+
+                    // Base font size scaling across ALL columns & headers
+                    const baseFont = 13.0 * (fontScale / 100.0);
+                    
+                    let fontStyle = document.getElementById('dyn-font-style');
+                    if (!fontStyle) {
+                        fontStyle = document.createElement('style');
+                        fontStyle.id = 'dyn-font-style';
+                        document.head.appendChild(fontStyle);
+                    }
+                    fontStyle.innerHTML = 
+                        '.data-table th { font-size: ' + (baseFont * 1.02) + 'px !important; }' +
+                        '.data-table td { font-size: ' + baseFont + 'px !important; }' +
+                        '.col-date { font-size: ' + (baseFont * 0.96) + 'px !important; }' +
+                        '.col-outline { font-size: ' + (baseFont * 0.98) + 'px !important; }' +
+                        '.col-topic { font-size: ' + (baseFont * 0.98) + 'px !important; }' +
+                        '.col-speaker { font-size: ' + (baseFont * 1.02) + 'px !important; }' +
+                        '.col-cong { font-size: ' + (baseFont * 0.95) + 'px !important; }' +
+                        '.col-part { font-size: ' + (baseFont * 0.98) + 'px !important; }' +
+                        '.col-interp { font-size: ' + (baseFont * 0.98) + 'px !important; }';
+                }
+
+                // Attach event listeners for real-time reactivity
+                document.getElementById('ctrl-margin-top').addEventListener('input', applyResponsiveLayout);
+                document.getElementById('ctrl-margin-bottom').addEventListener('input', applyResponsiveLayout);
+                document.getElementById('ctrl-margin-left').addEventListener('input', applyResponsiveLayout);
+                document.getElementById('ctrl-margin-right').addEventListener('input', applyResponsiveLayout);
+                document.getElementById('ctrl-theme').addEventListener('change', applyResponsiveLayout);
+                document.getElementById('ctrl-custom-color').addEventListener('input', applyResponsiveLayout);
+                document.getElementById('ctrl-row-mode').addEventListener('change', applyResponsiveLayout);
+                document.getElementById('ctrl-font-scale').addEventListener('input', applyResponsiveLayout);
+                document.getElementById('ctrl-show-guide').addEventListener('change', applyResponsiveLayout);
+
+                window.onload = function() {
+                    applyResponsiveLayout();
+                };
             <\/script>
         </body>
         </html>
@@ -4013,7 +5497,9 @@ async function saveCustomSupabase() {
     }
 
     try {
-        const tempClient = window.supabase.createClient(url, key);
+        const tempClient = window.supabase.createClient(url, key, {
+            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+        });
         // 간단한 조회 쿼리로 연결성 검증 (테이블 유무에 따른 에러 상관없이 연결 자체 테스트)
         const { error } = await tempClient.from('app_settings').select('*').limit(1);
 
@@ -4325,7 +5811,9 @@ async function saveLoginSupabase() {
     }
 
     try {
-        const tempClient = window.supabase.createClient(url, key);
+        const tempClient = window.supabase.createClient(url, key, {
+            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+        });
         const { error } = await tempClient.from('app_settings').select('*').limit(1);
         if (error && error.message && (error.message.includes('Fetch') || error.status === 400 || error.status === 401 || error.status === 403)) {
             throw new Error(error.message);
@@ -4354,13 +5842,19 @@ async function loadWebConnections() {
             .select('*')
             .order('username', { ascending: true });
 
-        if (error) throw error;
-        webConnections = data || [];
+        if (error) {
+            console.warn('[WebConnections] Table database_connections may not exist:', error.message || error);
+            webConnections = [];
+        } else {
+            webConnections = data || [];
+        }
         deletedWebConnectionUsernames = [];
         renderWebConnectionsTables();
     } catch (e) {
-        console.error(e);
-        alert('웹 로그인 정보를 불러오는 중 오류 발생');
+        console.warn('[WebConnections] Failed to load web connections:', e);
+        webConnections = [];
+        deletedWebConnectionUsernames = [];
+        renderWebConnectionsTables();
     }
 }
 
@@ -4426,7 +5920,9 @@ async function testWebConnection(idx) {
     }
 
     try {
-        const tempClient = window.supabase.createClient(url, key);
+        const tempClient = window.supabase.createClient(url, key, {
+            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+        });
         const { error } = await tempClient.from('app_settings').select('*').limit(1);
         if (error && error.message && (error.message.includes('Fetch') || error.status === 400 || error.status === 401 || error.status === 403)) {
             throw new Error(error.message);

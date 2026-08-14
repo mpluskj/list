@@ -552,3 +552,217 @@ body {
 .row-confirmed .col-date {
     background-color: #f8f4ff !important;
 }
+
+/* 주간 선택 모달 스타일 */
+.week-title-clickable {
+    cursor: pointer;
+    transition: color 0.2s, transform 0.1s;
+    user-select: none;
+}
+
+.week-title-clickable:hover {
+    color: #3f51b5;
+}
+
+.week-title-clickable:active {
+    transform: scale(0.98);
+}
+
+.week-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 15px;
+    box-sizing: border-box;
+    backdrop-filter: blur(2px);
+}
+
+.week-modal-content {
+    background-color: #ffffff;
+    border-radius: 12px;
+    width: 100%;
+    max-width: 440px;
+    min-width: 280px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+    animation: modalFadeIn 0.2s ease-out;
+}
+
+@keyframes modalFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.week-modal-header {
+    padding: 14px 18px;
+    background-color: #3f51b5;
+    color: #ffffff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.week-modal-close-btn {
+    background: none;
+    border: none;
+    color: #ffffff;
+    font-size: 1.5em;
+    cursor: pointer;
+    padding: 0 5px;
+    line-height: 1;
+    opacity: 0.85;
+    transition: opacity 0.2s;
+}
+
+.week-modal-close-btn:hover {
+    opacity: 1;
+}
+
+.week-modal-list {
+    padding: 10px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.week-modal-item {
+    padding: 12px 14px;
+    border-radius: 8px;
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+    font-size: 1.05em;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.week-modal-date {
+    font-weight: 600;
+    white-space: nowrap;
+    font-size: 1.05em;
+    flex-shrink: 0;
+}
+
+.week-modal-item:hover {
+    background-color: #eef2ff;
+    border-color: #c7d2fe;
+}
+
+.week-modal-item.active {
+    background-color: #e0e7ff;
+    border-color: #6366f1;
+    font-weight: bold;
+    color: #3730a3;
+}
+
+.week-modal-item.assigned-week {
+    background-color: #fffde7;
+    border-color: #ffe082;
+}
+
+.week-modal-item.assigned-week:hover {
+    background-color: #fff9c4;
+    border-color: #ffd54f;
+}
+
+.week-modal-item.assigned-week.active {
+    background-color: #fff59d;
+    border-color: #fbc02d;
+    color: #f57f17;
+}
+
+.week-badges-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: flex-end;
+    align-items: center;
+    max-width: 65%;
+}
+
+.week-user-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.85em;
+    font-weight: bold;
+    padding: 3px 8px;
+    border-radius: 10px;
+    line-height: 1.25;
+    white-space: nowrap;
+    word-break: break-all;
+}
+
+.badge-weekday {
+    background-color: #ffe082;
+    color: #000000;
+}
+
+.badge-weekend {
+    background-color: #90caf9;
+    color: #000000;
+}
+
+/* 수어 및 통역 전용 뱃지 및 표시 스타일 */
+.badge-interp {
+    background-color: #ff7675;
+    color: #ffffff;
+    font-size: 0.72em;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-right: 4px;
+    display: inline-block;
+}
+
+.interp-tag-prefix {
+    color: #d63031;
+    font-weight: 700;
+    margin-right: 2px;
+}
+
+.sl-col-check, .sl-col-interp, .sl-col-weekday-interp, .sl-col-deaf, .sl-col-interp-grade {
+    transition: all 0.2s ease;
+}
+
+/* 모바일 좁은 화면 대응 */
+@media screen and (max-width: 380px) {
+    .week-modal-overlay {
+        padding: 8px;
+    }
+    .week-modal-item {
+        padding: 9px 12px;
+        font-size: 0.96em;
+    }
+    .week-modal-date {
+        font-size: 0.96em;
+    }
+    .week-user-badge {
+        font-size: 0.78em;
+        padding: 2px 6px;
+    }
+}
